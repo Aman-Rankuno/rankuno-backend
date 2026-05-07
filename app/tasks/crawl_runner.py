@@ -33,16 +33,20 @@ def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = Non
         output_dir = os.path.join(settings.CRAWL_OUTPUT_DIR, crawl_id)
         os.makedirs(output_dir, exist_ok=True)
 
+        os.makedirs(output_dir, exist_ok=True)
+
         cmd = [
             settings.SCREAMING_FROG_CLI,
             "--headless",
             "--output-folder", output_dir,
+            "--overwrite",
             "--export-tabs", "Internal:All",
             "--save-crawl",
         ]
 
-        if crawl_type == "full-site":
-            cmd += ["--crawl", domain]
+        if crawl_type in ("full-site", "full-audit", "advanced-audit", "js-crawl", "orphan-pages", "sitemap-generator"):
+            crawl_url = domain if domain.startswith("http") else f"https://{domain}"
+            cmd += ["--crawl", crawl_url]
         else:
             url_file = os.path.join(output_dir, "urls.txt")
             with open(url_file, "w") as f:
@@ -63,7 +67,14 @@ def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = Non
             crawl.completed_at = datetime.now(timezone.utc)
         else:
             crawl.status = "failed"
-            crawl.error_message = result.stderr[:500] if result.stderr else "Unknown error"
+            error_detail = ""
+            if result.stderr:
+                error_detail = result.stderr[:500]
+            elif result.stdout:
+                error_detail = result.stdout[:500]
+            else:
+                error_detail = f"Screaming Frog exited with code {result.returncode}"
+            crawl.error_message = error_detail
             crawl.completed_at = datetime.now(timezone.utc)
 
         db.commit()
