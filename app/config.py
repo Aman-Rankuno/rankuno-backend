@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     REDIS_URL: str
     SCREAMING_FROG_CLI: str
     CRAWL_OUTPUT_DIR: str
+    CRAWL_CONFIGS_DIR: str
     SECRET_KEY: str
 
     class Config:

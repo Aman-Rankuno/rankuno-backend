@@ -13,6 +13,7 @@ class Crawl(Base):
     )
     domain: Mapped[str] = mapped_column(String(255), nullable=False)
     crawl_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    config_file: Mapped[str | None] = mapped_column(String(500), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="queued")
     pages_crawled: Mapped[int] = mapped_column(Integer, default=0)
     report_path: Mapped[str | None] = mapped_column(String(500), nullable=True)

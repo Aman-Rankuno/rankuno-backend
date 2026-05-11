@@ -24,7 +24,7 @@ def get_db() -> Session:
 
 
 @celery_app.task(bind=True, time_limit=None, soft_time_limit=None)
-def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = None):
+def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = None, config_file: str = None):
     db = get_db()
     try:
         crawl = db.query(Crawl).filter(Crawl.id == crawl_id).first()
@@ -53,6 +53,11 @@ def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = Non
             "--export-tabs", "Internal:All",
             "--save-crawl",
         ]
+        
+        if config_file:
+            config_path = os.path.join(settings.CRAWL_CONFIGS_DIR, config_file)
+            if os.path.exists(config_path):
+                cmd += ["--config", config_path]
 
         if crawl_type in ("full-site", "full-audit", "advanced-audit", "js-crawl", "orphan-pages", "sitemap-generator"):
             crawl_url = domain if domain.startswith("http") else f"https://{domain}"

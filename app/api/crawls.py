@@ -13,6 +13,7 @@ class CrawlCreate(BaseModel):
     domain: str
     crawl_type: str
     urls: Optional[str] = None
+    config_file: Optional[str] = None
 
 
 class CrawlResponse(BaseModel):
@@ -41,7 +42,7 @@ def create_crawl(payload: CrawlCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(crawl)
 
-    run_crawl.delay(crawl.id, payload.domain, payload.crawl_type, payload.urls)
+    run_crawl.delay(crawl.id, payload.domain, payload.crawl_type, payload.urls, payload.config_file)
 
     return {"id": crawl.id, "status": "queued", "message": "Crawl queued successfully"}
 
