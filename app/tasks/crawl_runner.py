@@ -14,7 +14,6 @@ celery_app = Celery(
     backend=settings.REDIS_URL,
 )
 
-# No task time limit, crawls can run as long as needed
 celery_app.conf.task_time_limit = None
 celery_app.conf.task_soft_time_limit = None
 
@@ -37,12 +36,10 @@ def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = Non
         os.makedirs(settings.CRAWL_OUTPUT_DIR, exist_ok=True)
         output_dir = os.path.join(settings.CRAWL_OUTPUT_DIR, crawl_id)
         os.makedirs(output_dir, exist_ok=True)
-        
-        # Verify folder exists before launching Screaming Frog
+
         if not os.path.exists(output_dir):
             raise Exception(f"Failed to create output directory: {output_dir}")
-        
-        # Small delay to ensure filesystem sync
+
         time.sleep(1)
 
         cmd = [
@@ -53,7 +50,7 @@ def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = Non
             "--export-tabs", "Internal:All",
             "--save-crawl",
         ]
-        
+
         if config_file:
             config_path = os.path.join(settings.CRAWL_CONFIGS_DIR, config_file)
             if os.path.exists(config_path):
@@ -68,9 +65,8 @@ def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = Non
                 f.write(urls or "")
             cmd += ["--crawl-list", url_file]
 
-        # Use Popen so the process runs freely with no timeout
         log_file = open(os.path.join(output_dir, "crawl.log"), "w")
-        
+
         process = subprocess.Popen(
             cmd,
             stdout=log_file,
@@ -79,10 +75,8 @@ def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = Non
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
 
-        # Poll every 30 seconds, update DB so frontend knows it's still running
         while process.poll() is None:
             time.sleep(30)
-            # Keep the DB session alive and status as running
             try:
                 db.refresh(crawl)
             except Exception:
@@ -90,7 +84,7 @@ def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = Non
 
         exit_code = process.wait()
         log_file.close()
-        
+
         if exit_code == 0:
             crawl.status = "completed"
             crawl.report_path = output_dir
@@ -103,23 +97,6 @@ def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = Non
                     error_detail = f.read()[-500:]
             except Exception:
                 error_detail = f"Screaming Frog exited with code {exit_code}"
-            crawl.error_message = error_detail
-            crawl.completed_at = datetime.now(timezone.utc)
-
-        if process.returncode == 0:
-            crawl.status = "completed"
-            crawl.report_path = output_dir
-            crawl.pages_crawled = count_crawled_pages(output_dir)
-            crawl.completed_at = datetime.now(timezone.utc)
-        else:
-            crawl.status = "failed"
-            error_detail = ""
-            if stderr:
-                error_detail = stderr[:500]
-            elif stdout:
-                error_detail = stdout[:500]
-            else:
-                error_detail = f"Screaming Frog exited with code {process.returncode}"
             crawl.error_message = error_detail
             crawl.completed_at = datetime.now(timezone.utc)
 
