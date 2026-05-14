@@ -8,13 +8,17 @@ from app.tasks.crawl_runner import run_crawl
 
 router = APIRouter()
 
-
 class CrawlCreate(BaseModel):
     domain: str
     crawl_type: str
     urls: Optional[str] = None
     config_file: Optional[str] = None
-
+    gsc_account: Optional[str] = None
+    gsc_property: Optional[str] = None
+    ga_account: Optional[str] = None
+    ga_property: Optional[str] = None
+    include_patterns: Optional[str] = None
+    exclude_patterns: Optional[str] = None
 
 class CrawlResponse(BaseModel):
     id: str
@@ -30,7 +34,6 @@ class CrawlResponse(BaseModel):
     class Config:
         from_attributes = True
 
-
 @router.post("/")
 def create_crawl(payload: CrawlCreate, db: Session = Depends(get_db)):
     crawl = Crawl(
@@ -41,17 +44,23 @@ def create_crawl(payload: CrawlCreate, db: Session = Depends(get_db)):
     db.add(crawl)
     db.commit()
     db.refresh(crawl)
-
-    run_crawl.delay(crawl.id, payload.domain, payload.crawl_type, payload.urls, payload.config_file)
-
+    run_crawl.delay(
+        crawl.id,
+        payload.domain,
+        payload.crawl_type,
+        payload.urls,
+        payload.config_file,
+        payload.gsc_account,
+        payload.gsc_property,
+        payload.ga_account,
+        payload.ga_property,
+    )
     return {"id": crawl.id, "status": "queued", "message": "Crawl queued successfully"}
-
 
 @router.get("/")
 def list_crawls(db: Session = Depends(get_db)):
     crawls = db.query(Crawl).order_by(Crawl.created_at.desc()).all()
     return crawls
-
 
 @router.get("/{crawl_id}")
 def get_crawl(crawl_id: str, db: Session = Depends(get_db)):

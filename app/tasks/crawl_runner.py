@@ -23,7 +23,7 @@ def get_db() -> Session:
 
 
 @celery_app.task(bind=True, time_limit=None, soft_time_limit=None)
-def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = None, config_file: str = None):
+def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = None, config_file: str = None, gsc_account: str = None, gsc_property: str = None, ga_account: str = None, ga_property: str = None):
     db = get_db()
     try:
         crawl = db.query(Crawl).filter(Crawl.id == crawl_id).first()
@@ -47,7 +47,7 @@ def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = Non
             "--headless",
             "--output-folder", output_dir,
             "--overwrite",
-            "--export-tabs", "Internal:All",
+            "--export-tabs", "Internal:All,Search Console:All,Google Analytics:All",
             "--save-crawl",
         ]
 
@@ -55,7 +55,12 @@ def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = Non
             config_path = os.path.join(settings.CRAWL_CONFIGS_DIR, config_file)
             if os.path.exists(config_path):
                 cmd += ["--config", config_path]
+        if gsc_account and gsc_property:
+            cmd += ["--use-google-search-console", gsc_account, gsc_property]
+        if ga_account and ga_property:
+            cmd += ["--use-google-analytics", ga_account, ga_property]
 
+        
         if crawl_type in ("full-site", "full-audit", "advanced-audit", "js-crawl", "orphan-pages", "sitemap-generator"):
             crawl_url = domain if domain.startswith("http") else f"https://{domain}"
             cmd += ["--crawl", crawl_url]
