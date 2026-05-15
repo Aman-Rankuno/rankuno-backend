@@ -16,7 +16,9 @@ class CrawlCreate(BaseModel):
     gsc_account: Optional[str] = None
     gsc_property: Optional[str] = None
     ga_account: Optional[str] = None
-    ga_property: Optional[str] = None
+    ga4_account: Optional[str] = None
+    ga4_property: Optional[str] = None
+    ga4_stream: Optional[str] = None
     include_patterns: Optional[str] = None
     exclude_patterns: Optional[str] = None
 
@@ -53,7 +55,9 @@ def create_crawl(payload: CrawlCreate, db: Session = Depends(get_db)):
         payload.gsc_account,
         payload.gsc_property,
         payload.ga_account,
-        payload.ga_property,
+        payload.ga4_account,
+        payload.ga4_property,
+        payload.ga4_stream,
     )
     return {"id": crawl.id, "status": "queued", "message": "Crawl queued successfully"}
 
