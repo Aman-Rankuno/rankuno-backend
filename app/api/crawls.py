@@ -1,10 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
 from app.database import get_db
 from app.models.crawl import Crawl
 from app.tasks.crawl_runner import run_crawl
+import zipfile
+import io
+import os
 
 router = APIRouter()
 
@@ -72,3 +76,25 @@ def get_crawl(crawl_id: str, db: Session = Depends(get_db)):
     if not crawl:
         raise HTTPException(status_code=404, detail="Crawl not found")
     return crawl
+
+@router.get("/{crawl_id}/download/zip")
+def download_zip(crawl_id: str, db: Session = Depends(get_db)):
+    crawl = db.query(Crawl).filter(Crawl.id == crawl_id).first()
+    if not crawl:
+        raise HTTPException(status_code=404, detail="Crawl not found")
+    if not crawl.report_path or not os.path.exists(crawl.report_path):
+        raise HTTPException(status_code=404, detail="Crawl output folder not found")
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for filename in os.listdir(crawl.report_path):
+            filepath = os.path.join(crawl.report_path, filename)
+            if os.path.isfile(filepath):
+                zf.write(filepath, arcname=filename)
+    zip_buffer.seek(0)
+    domain_safe = crawl.domain.replace("https://", "").replace("http://", "").replace("/", "_").rstrip("_")
+    zip_filename = f"{domain_safe}_crawl.zip"
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={zip_filename}"},
+    )
