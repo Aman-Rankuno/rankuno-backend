@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     CRAWL_OUTPUT_DIR: str
     CRAWL_CONFIGS_DIR: str
     RULEBOOKS_DIR: str = r"D:\projects\rankuno-rulebooks"
+    TEMPLATES_DIR: str = r"D:\projects\rankuno-templates"
     SECRET_KEY: str
 
     class Config:
