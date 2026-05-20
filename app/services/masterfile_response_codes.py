@@ -1,46 +1,103 @@
 import os
 import io
-import shutil
 import zipfile
 import pandas as pd
 import openpyxl
-from openpyxl.utils import get_column_letter
+from openpyxl.styles import Font
 from app.config import settings
 from app.services.rulebook import load_rulebook, classify_url
 
+BLACK_FONT = Font(name="Arial", size=9, color="FF000000")
 PRIORITY_ORDER = {"High": 0, "Medium": 1, "Low": 2}
 
-# Template layout constants
-T1_DATA_START_ROW = 15   # #Affected URLs row
-T1_PCT_ROW = 16          # % Share row
-T2_DATA_START_ROW = 21   # First theme data row
-T2_DATA_END_ROW = 30     # Last sample theme row
-T3_DATA_START_ROW = 34   # First data row in Table 3
+T1_PRIORITY_ROW = 13
+T1_DATA_START_ROW = 15
+T1_PCT_ROW = 16
+T2_DATA_START_ROW = 21
+T2_DATA_END_ROW = 30
+T3_DATA_START_ROW = 34
 
 SC_KEYS = ["301", "302", "307", "308", "400", "401", "403", "404",
            "500", "502", "503", "504", "No response code"]
 
-# Column positions in Table 1 (B=2 is label, C=3 is first sc)
-T1_LABEL_COL = 2
-T1_SC_START_COL = 3  # C
+SC_PRIORITY = {
+    "301": "Medium", "302": "High", "307": "High", "308": "Medium",
+    "400": "High", "401": "High", "403": "High", "404": "High",
+    "500": "High", "502": "High", "503": "High", "504": "High",
+    "No response code": "High",
+}
 
-# Column positions in Table 4
-T4_LABEL_COL = 17   # Q
-T4_CHAIN_COL = 18   # R
-T4_LOOP_COL = 19    # S
+T1_SC_START_COL = 3
+T4_CHAIN_COL = 18
+T4_LOOP_COL = 19
+T2_THEME_COL = 1
+T2_PRIORITY_COL = 2
+T2_SC_START_COL = 3
 
-# Table 2 columns
-T2_THEME_COL = 1    # A
-T2_PRIORITY_COL = 2 # B
-T2_SC_START_COL = 3 # C
-
-# Table 3 columns
 T3_COLS = [
     "Error type", "Address", "Page Theme 1", "Page Theme 2",
     "Content Type", "Status Code", "Status", "Indexability",
     "Indexability Status", "Inlinks", "Redirect URL", "Redirect Type",
     "Redirect chain", "Redirect loop", "Impressions", "Clicks", "Organic Sessions"
 ]
+
+KEEP_FROM_TEMPLATE = {
+    'xl/drawings/drawing1.xml',
+    'xl/drawings/vmlDrawing1.vml',
+    'xl/comments1.xml',
+    'xl/persons/person.xml',
+    'xl/documenttasks/documenttask1.xml',
+    'xl/threadedComments/threadedComment1.xml',
+}
+
+DRAWING_CT = '<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>'
+DRAWING_REL = '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>'
+VML_REL = '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/>'
+
+
+def _merge_with_drawings(template_path: str, openpyxl_buf: io.BytesIO) -> bytes:
+    openpyxl_buf.seek(0)
+
+    # Step 1: merge openpyxl output + template drawing files
+    step1_buf = io.BytesIO()
+    with zipfile.ZipFile(template_path, 'r') as t_zip:
+        with zipfile.ZipFile(openpyxl_buf, 'r') as o_zip:
+            with zipfile.ZipFile(step1_buf, 'w', zipfile.ZIP_DEFLATED) as out_zip:
+                for item in o_zip.namelist():
+                    out_zip.writestr(item, o_zip.read(item))
+                for item in KEEP_FROM_TEMPLATE:
+                    if item in t_zip.namelist():
+                        out_zip.writestr(item, t_zip.read(item))
+                for item in t_zip.namelist():
+                    if 'drawings/_rels' in item and item not in o_zip.namelist():
+                        out_zip.writestr(item, t_zip.read(item))
+
+    # Step 2: patch [Content_Types].xml and sheet1.xml.rels
+    step1_buf.seek(0)
+    step1_bytes = step1_buf.read()
+
+    with zipfile.ZipFile(io.BytesIO(step1_bytes), 'r') as z:
+        ct = z.read('[Content_Types].xml').decode('utf-8')
+        sheet_rels = z.read('xl/worksheets/_rels/sheet1.xml.rels').decode('utf-8')
+
+    if 'drawing1' not in ct:
+        ct = ct.replace('</Types>', DRAWING_CT + '</Types>')
+    if 'drawing1' not in sheet_rels:
+        sheet_rels = sheet_rels.replace('</Relationships>', DRAWING_REL + VML_REL + '</Relationships>')
+
+    final_buf = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(step1_bytes), 'r') as z:
+        with zipfile.ZipFile(final_buf, 'w', zipfile.ZIP_DEFLATED) as out_zip:
+            for item in z.namelist():
+                if item == '[Content_Types].xml':
+                    out_zip.writestr(item, ct.encode('utf-8'))
+                elif item == 'xl/worksheets/_rels/sheet1.xml.rels':
+                    out_zip.writestr(item, sheet_rels.encode('utf-8'))
+                else:
+                    out_zip.writestr(item, z.read(item))
+
+    final_buf.seek(0)
+    return final_buf.read()
 
 
 def build_response_codes_masterfile(crawl_id: str, domain: str, report_path: str) -> bytes:
@@ -70,7 +127,6 @@ def build_response_codes_masterfile(crawl_id: str, domain: str, report_path: str
     df_gsc = load_csv("search_console_all.csv")
     df_ga = load_csv("analytics_all.csv")
 
-    # Total URLs from internal_all (all content types)
     total_crawled = len(df_internal_all) if not df_internal_all.empty else 0
 
     def tag(df, label):
@@ -86,7 +142,6 @@ def build_response_codes_masterfile(crawl_id: str, domain: str, report_path: str
     df_no_t = tag(df_no_response, "No response code")
     df_blocked_t = tag(df_blocked, "Blocked by robots")
 
-    # Redirect chain/loop lookup sets
     chain_urls = set()
     loop_urls = set()
     if not df_redirect_chain.empty:
@@ -98,7 +153,6 @@ def build_response_codes_masterfile(crawl_id: str, domain: str, report_path: str
         if col:
             loop_urls = set(df_redirect_loop[col].dropna().astype(str))
 
-    # GSC lookup
     gsc_map = {}
     if not df_gsc.empty:
         a = next((c for c in df_gsc.columns if c.lower() == "address"), None)
@@ -111,7 +165,6 @@ def build_response_codes_masterfile(crawl_id: str, domain: str, report_path: str
                     "clicks": r.get(clk, 0) if clk else 0,
                 }
 
-    # GA lookup
     ga_map = {}
     if not df_ga.empty:
         a = next((c for c in df_ga.columns if c.lower() == "address"), None)
@@ -120,10 +173,8 @@ def build_response_codes_masterfile(crawl_id: str, domain: str, report_path: str
             for _, r in df_ga.iterrows():
                 ga_map[str(r[a])] = r.get(s, 0)
 
-    # Combine frames
     frames = [df for df in [df_3xx_t, df_4xx_t, df_5xx_t, df_no_t, df_blocked_t] if not df.empty]
     if not frames:
-        # Return template as-is if no data
         with open(template_path, "rb") as f:
             return f.read()
 
@@ -146,20 +197,14 @@ def build_response_codes_masterfile(crawl_id: str, domain: str, report_path: str
     ru_col = get_col(df_combined, "Redirect URL")
     rt_col = get_col(df_combined, "Redirect Type")
 
-    # Build Table 3 rows
     rows = []
     for _, row in df_combined.iterrows():
         url = str(row.get(addr_col, "")) if addr_col else ""
         error_type = str(row.get("_error_type", ""))
-        page_theme1, page_theme2 = classify_url(url, rulebook)
+        page_theme1, page_theme2, _, _ = classify_url(url, rulebook)
         gsc = gsc_map.get(url, {})
-
-        if error_type == "3xx":
-            redirect_chain = "TRUE" if url in chain_urls else ""
-            redirect_loop = "TRUE" if url in loop_urls else ""
-        else:
-            redirect_chain = ""
-            redirect_loop = ""
+        redirect_chain = ("TRUE" if url in chain_urls else "") if error_type == "3xx" else ""
+        redirect_loop = ("TRUE" if url in loop_urls else "") if error_type == "3xx" else ""
 
         rows.append({
             "Error type": error_type,
@@ -184,7 +229,6 @@ def build_response_codes_masterfile(crawl_id: str, domain: str, report_path: str
     df_table3 = pd.DataFrame(rows)
     df_table3 = df_table3.sort_values("Impressions", ascending=False).reset_index(drop=True)
 
-    # Table 1 summary
     sc_counts = {k: 0 for k in SC_KEYS}
     for _, row in df_table3.iterrows():
         sc = str(row["Status Code"])
@@ -194,7 +238,6 @@ def build_response_codes_masterfile(crawl_id: str, domain: str, report_path: str
         elif sc in sc_counts:
             sc_counts[sc] += 1
 
-    # Table 2 - page theme wise
     theme_counts = {}
     for _, row in df_table3.iterrows():
         theme = row["Page Theme 1"] or "Others"
@@ -215,66 +258,70 @@ def build_response_codes_masterfile(crawl_id: str, domain: str, report_path: str
         key=lambda x: PRIORITY_ORDER.get(x[1].get("_priority", "Low"), 2)
     )
 
-    # Table 4
     chain_count = len(df_redirect_chain) if not df_redirect_chain.empty else 0
     loop_count = len(df_redirect_loop) if not df_redirect_loop.empty else 0
     total_3xx = len(df_3xx) if not df_3xx.empty else 0
 
-    # Load template
-    wb = openpyxl.load_workbook(template_path)
+    wb = openpyxl.load_workbook(template_path, data_only=False)
     ws = wb.active
 
-    # ── Fill Table 1: #Affected URLs (row 15) and % Share (row 16)
+    for r in list(range(T1_DATA_START_ROW, T1_PCT_ROW + 1)) + list(range(T2_DATA_START_ROW, T2_DATA_END_ROW + 1)) + list(range(T3_DATA_START_ROW, ws.max_row + 1)):
+        for c in range(1, ws.max_column + 1):
+            ws.cell(r, c).font = BLACK_FONT
+
     for i, sc in enumerate(SC_KEYS):
         col = T1_SC_START_COL + i
         count = sc_counts[sc]
         ws.cell(T1_DATA_START_ROW, col).value = count if count > 0 else None
+        ws.cell(T1_DATA_START_ROW, col).font = BLACK_FONT
         pct = f"{round(count / total_crawled * 100, 1)}%" if total_crawled > 0 and count > 0 else None
         ws.cell(T1_PCT_ROW, col).value = pct
+        ws.cell(T1_PCT_ROW, col).font = BLACK_FONT
 
-    # ── Fill Table 4: #Affected URLs (row 15) and % Share (row 16)
+    
     ws.cell(T1_DATA_START_ROW, T4_CHAIN_COL).value = chain_count if chain_count > 0 else None
+    ws.cell(T1_DATA_START_ROW, T4_CHAIN_COL).font = BLACK_FONT
     ws.cell(T1_DATA_START_ROW, T4_LOOP_COL).value = loop_count if loop_count > 0 else None
+    ws.cell(T1_DATA_START_ROW, T4_LOOP_COL).font = BLACK_FONT
     pct_chain = f"{round(chain_count / total_3xx * 100, 1)}%" if total_3xx > 0 and chain_count > 0 else None
     pct_loop = f"{round(loop_count / total_3xx * 100, 1)}%" if total_3xx > 0 and loop_count > 0 else None
     ws.cell(T1_PCT_ROW, T4_CHAIN_COL).value = pct_chain
+    ws.cell(T1_PCT_ROW, T4_CHAIN_COL).font = BLACK_FONT
     ws.cell(T1_PCT_ROW, T4_LOOP_COL).value = pct_loop
+    ws.cell(T1_PCT_ROW, T4_LOOP_COL).font = BLACK_FONT
 
-    # ── Clear Table 2 sample data rows (21-30)
     for r in range(T2_DATA_START_ROW, T2_DATA_END_ROW + 1):
         for c in range(1, ws.max_column + 1):
             ws.cell(r, c).value = None
 
-    # ── Fill Table 2
     for row_offset, (theme, counts) in enumerate(sorted_themes):
         r = T2_DATA_START_ROW + row_offset
         total_theme = counts["total"]
         ws.cell(r, T2_THEME_COL).value = theme
+        ws.cell(r, T2_THEME_COL).font = BLACK_FONT
         ws.cell(r, T2_PRIORITY_COL).value = counts.get("_priority", "High")
+        ws.cell(r, T2_PRIORITY_COL).font = BLACK_FONT
         for i, sc in enumerate(SC_KEYS):
             cnt = counts.get(sc, 0)
-            if cnt > 0 and total_theme > 0:
-                pct = round(cnt / total_theme * 100)
-                val = f"{cnt} ({pct}%)"
-            else:
-                val = None
-            ws.cell(r, T2_SC_START_COL + i).value = val
+            val = f"{cnt} ({round(cnt / total_theme * 100)}%)" if cnt > 0 and total_theme > 0 else None
+            cell = ws.cell(r, T2_SC_START_COL + i)
+            cell.value = val
+            cell.font = BLACK_FONT
 
-    # ── Clear Table 3 sample data rows (34 onwards)
     for r in range(T3_DATA_START_ROW, ws.max_row + 1):
         for c in range(1, ws.max_column + 1):
             ws.cell(r, c).value = None
 
-    # ── Fill Table 3
     for row_offset, (_, row) in enumerate(df_table3.iterrows()):
         r = T3_DATA_START_ROW + row_offset
         for col_offset, col_name in enumerate(T3_COLS):
             val = row.get(col_name, "")
             if pd.isna(val) or val == "":
                 val = None
-            ws.cell(r, 1 + col_offset).value = val
+            cell = ws.cell(r, 1 + col_offset)
+            cell.value = val
+            cell.font = BLACK_FONT
 
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return buf.read()
+    openpyxl_buf = io.BytesIO()
+    wb.save(openpyxl_buf)
+    return _merge_with_drawings(template_path, openpyxl_buf)

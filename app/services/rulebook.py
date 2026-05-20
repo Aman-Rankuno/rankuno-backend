@@ -17,72 +17,88 @@ def load_rulebook(domain: str) -> dict:
     if not os.path.exists(path):
         return None
     try:
-        page_type_df = pd.read_excel(path, sheet_name="Page Type Rules", header=2)
-        page_type_df = page_type_df.dropna(subset=["Rule Type", "Rule / Pattern", "Page Type"])
-        page_type_rules = []
-        fallback_page_type = "Others"
-        for _, row in page_type_df.iterrows():
-            rule_type = str(row["Rule Type"]).strip()
-            pattern = str(row["Rule / Pattern"]).strip()
-            page_type = str(row["Page Type"]).strip()
-            if rule_type.lower() == "fallback":
-                fallback_page_type = page_type
-            else:
-                page_type_rules.append({
-                    "rule_type": rule_type,
-                    "pattern": pattern,
-                    "page_type": page_type,
-                })
+        df = pd.read_excel(path, sheet_name="Rulebook", header=1)
+        df = df.dropna(subset=["URL Pattern"])
 
-        language_df = pd.read_excel(path, sheet_name="Language Rules", header=2)
-        language_df = language_df.dropna(subset=["URL Pattern", "Language"])
-        language_rules = []
-        for _, row in language_df.iterrows():
-            language_rules.append({
-                "pattern": str(row["URL Pattern"]).strip(),
-                "language": str(row["Language"]).strip(),
+        rules = []
+        fallback = {"theme1": "Others", "theme2": "", "language": "", "priority": "Low"}
+
+        for _, row in df.iterrows():
+            # Rule Type column may be missing or empty - default to Contains
+            rule_type = str(row.get("Rule Type", "Contains")).strip()
+            if not rule_type or rule_type == "nan":
+                rule_type = "Contains"
+
+            pattern = str(row.get("URL Pattern", "")).strip()
+            theme1 = str(row.get("Theme Name 1", "")).strip()
+            theme2 = str(row.get("Theme Name 2", "")).strip()
+
+            # Handle multiple possible Language column spellings
+            language = ""
+            for lang_col in ["Language", "Languuage", "Lang"]:
+                val = row.get(lang_col, "")
+                if val and str(val) != "nan":
+                    language = str(val).strip()
+                    break
+
+            # Priority hardcoded per issue type - rulebook priority only used for Table 2 sorting
+            priority = str(row.get("Priority Weightage", "Low")).strip()
+            if not priority or priority == "nan":
+                priority = "Low"
+
+            if not pattern or pattern == "nan":
+                continue
+
+            # Detect fallback row
+            if rule_type in ("—", "-", "Fallback") or "no match" in pattern.lower():
+                fallback = {
+                    "theme1": theme1 or "Others",
+                    "theme2": theme2 if theme2 and theme2 != "nan" else "",
+                    "language": language,
+                    "priority": priority or "Low",
+                }
+                continue
+
+            rules.append({
+                "rule_type": rule_type,
+                "pattern": pattern,
+                "theme1": theme1,
+                "theme2": theme2 if theme2 and theme2 != "nan" else "",
+                "language": language,
+                "priority": priority or "Low",
             })
 
-        return {
-            "page_type_rules": page_type_rules,
-            "fallback_page_type": fallback_page_type,
-            "language_rules": language_rules,
-        }
+        return {"rules": rules, "fallback": fallback}
+
     except Exception as e:
         print(f"Error loading rulebook for {domain}: {e}")
         return None
 
 
 def classify_url(url: str, rulebook: dict) -> tuple:
+    """Returns (theme1, theme2, language, priority)"""
     if not rulebook:
-        return "", ""
+        return "", "", "", "Low"
 
-    page_type = rulebook["fallback_page_type"]
-    for rule in rulebook["page_type_rules"]:
-        rule_type = rule["rule_type"].lower()
+    for rule in rulebook["rules"]:
+        rule_type = rule["rule_type"].strip().lower()
         pattern = rule["pattern"]
         matched = False
         try:
             if rule_type == "contains":
                 matched = pattern.lower() in url.lower()
-            elif rule_type == "starts with":
+            elif rule_type in ("starts with", "startswith"):
                 matched = url.lower().startswith(pattern.lower())
-            elif rule_type == "ends with":
+            elif rule_type in ("ends with", "endswith"):
                 matched = url.lower().endswith(pattern.lower())
-            elif rule_type == "exact match":
+            elif rule_type in ("exact match", "exactmatch", "exact"):
                 matched = url.lower() == pattern.lower()
             elif rule_type == "regex":
                 matched = bool(re.search(pattern, url))
         except Exception:
             pass
         if matched:
-            page_type = rule["page_type"]
-            break
+            return rule["theme1"], rule["theme2"], rule["language"], rule["priority"]
 
-    language = "Unknown"
-    for rule in rulebook["language_rules"]:
-        if rule["pattern"].lower() in url.lower():
-            language = rule["language"]
-            break
-
-    return page_type, language
+    fb = rulebook["fallback"]
+    return fb["theme1"], fb["theme2"], fb["language"], fb["priority"]
