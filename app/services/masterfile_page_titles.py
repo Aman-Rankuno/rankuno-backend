@@ -55,7 +55,7 @@ T3_COLS = [
 ]
 
 ISSUE_KEYS = ["Short", "Long", "Missing", "Duplicate", "Multiple", "Same as H1", "Outside Head"]
-PRIORITY_ORDER = {"High": 0, "Medium": 1, "Low": 2}
+PRIORITY_ORDER = {"High": 0, "Medium": 1, "Low": 2, "N/A": 3}
 
 
 def _clear_cell(ws, row, col):

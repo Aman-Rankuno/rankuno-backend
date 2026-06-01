@@ -8,7 +8,7 @@ from app.config import settings
 from app.services.rulebook import load_rulebook, classify_url
 
 BLACK_FONT = Font(name="Arial", size=9, color="FF000000")
-PRIORITY_ORDER = {"High": 0, "Medium": 1, "Low": 2}
+PRIORITY_ORDER = {"High": 0, "Medium": 1, "Low": 2, "N/A": 3}
 
 T1_PRIORITY_ROW = 13
 T1_DATA_START_ROW = 15

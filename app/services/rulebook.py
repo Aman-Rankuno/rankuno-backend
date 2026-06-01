@@ -21,7 +21,7 @@ def load_rulebook(domain: str) -> dict:
         df = df.dropna(subset=["URL Pattern"])
 
         rules = []
-        fallback = {"theme1": "Others", "theme2": "", "language": "", "priority": "Low"}
+        fallback = {"theme1": "Others", "theme2": "", "language": "", "priority": "N/A"}
 
         for _, row in df.iterrows():
             # Rule Type column may be missing or empty - default to Contains
@@ -42,9 +42,9 @@ def load_rulebook(domain: str) -> dict:
                     break
 
             # Priority hardcoded per issue type - rulebook priority only used for Table 2 sorting
-            priority = str(row.get("Priority Weightage", "Low")).strip()
+            priority = str(row.get("Priority Weightage", "")).strip()
             if not priority or priority == "nan":
-                priority = "Low"
+                priority = "N/A"
 
             if not pattern or pattern == "nan":
                 continue
@@ -55,7 +55,7 @@ def load_rulebook(domain: str) -> dict:
                     "theme1": theme1 or "Others",
                     "theme2": theme2 if theme2 and theme2 != "nan" else "",
                     "language": language,
-                    "priority": priority or "Low",
+                    "priority": priority or "N/A",
                 }
                 continue
 
@@ -65,7 +65,7 @@ def load_rulebook(domain: str) -> dict:
                 "theme1": theme1,
                 "theme2": theme2 if theme2 and theme2 != "nan" else "",
                 "language": language,
-                "priority": priority or "Low",
+                "priority": priority or "N/A",
             })
 
         return {"rules": rules, "fallback": fallback}
