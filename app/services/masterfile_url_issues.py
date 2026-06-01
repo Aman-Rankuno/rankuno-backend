@@ -460,69 +460,7 @@ def build_url_issues_masterfile(crawl_id: str, domain: str, report_path: str) ->
         ws.write(r, 8, safe_num(row.get("Clicks")), f_rgt)
         ws.write(r, 9, safe_num(row.get("Organic Sessions")), f_rgt)
 
-    # PIVOT SHEET
-    ws_pivot = wb.add_worksheet('Pivot')
-    f_pivot_title = f(bold=True, font_name=FONT, font_size=10, font_color=BLACK)
-    f_pivot_note = f(font_name=FONT, font_size=8, font_color='#595959', italic=True, text_wrap=True)
-
-    ws_pivot.write(0, 0, 'URL Issues - Pivot Analysis', f_pivot_title)
-    ws_pivot.write(1, 0, (
-        'To create the pivot table: select all data in the URL Issues sheet Table 3, '
-        'then Insert > PivotTable. Set Rows = Page Theme 1, Columns = Error Type, '
-        'Values = Count of Error Type, Filters = Page Theme 2.'
-    ), f_pivot_note)
-    ws_pivot.set_row(1, 45)
-    ws_pivot.set_column('A:A', 50)
-
-    # Write a summary pivot-style table from the data we have
-    if not df_table3.empty:
-        f_ph = f(bold=True, font_name=FONT, font_size=8, font_color=WHITE,
-                 bg_color=DARK, border=1, align='center', valign='vcenter')
-        f_ph_lft = f(bold=True, font_name=FONT, font_size=8, font_color=WHITE,
-                     bg_color=DARK, border=1, align='left', valign='vcenter')
-        f_pd = f(font_name=FONT, font_size=8, font_color=BLACK,
-                 border=1, align='center', valign='vcenter')
-        f_pd_lft = f(bold=True, font_name=FONT, font_size=8, font_color=BLACK,
-                     border=1, align='left', valign='vcenter')
-        f_pd_total = f(bold=True, font_name=FONT, font_size=8, font_color=BLACK,
-                       bg_color='#F2F2F2', border=1, align='center', valign='vcenter')
-
-        pivot_start = 4
-        ws_pivot.write(pivot_start, 0, 'Page Theme 1 \\ Error Type', f_ph_lft)
-        for i, issue in enumerate(ISSUE_KEYS):
-            ws_pivot.write(pivot_start, i + 1, issue, f_ph)
-        ws_pivot.write(pivot_start, len(ISSUE_KEYS) + 1, 'Grand Total', f_ph)
-
-        themes_in_order = [t for t, _ in sorted_themes]
-        for row_offset, theme in enumerate(themes_in_order):
-            r = pivot_start + 1 + row_offset
-            ws_pivot.write(r, 0, theme, f_pd_lft)
-            row_total = 0
-            for i, issue in enumerate(ISSUE_KEYS):
-                cnt = int(((df_table3['Page Theme 1'] == theme) &
-                           (df_table3['Error Type'] == issue)).sum())
-                ws_pivot.write(r, i + 1, cnt if cnt > 0 else None, f_pd)
-                row_total += cnt
-            ws_pivot.write(r, len(ISSUE_KEYS) + 1, row_total if row_total > 0 else None, f_pd_total)
-
-        # Grand Total row
-        total_r = pivot_start + 1 + len(themes_in_order)
-        ws_pivot.write(total_r, 0, 'Grand Total', f_pd_lft)
-        grand_total = 0
-        for i, issue in enumerate(ISSUE_KEYS):
-            cnt = int((df_table3['Error Type'] == issue).sum())
-            ws_pivot.write(total_r, i + 1, cnt if cnt > 0 else None, f_pd_total)
-            grand_total += cnt
-        ws_pivot.write(total_r, len(ISSUE_KEYS) + 1, grand_total if grand_total > 0 else None, f_pd_total)
-
-        ws_pivot.set_column('A:A', 25)
-        for i in range(len(ISSUE_KEYS) + 2):
-            ws_pivot.set_column(i + 1, i + 1, 18)
-
-        ws_pivot.write(total_r + 2, 0,
-            'Note: Page Theme 2 filter - use the slicer/autofilter on the URL Issues sheet to filter by Page Theme 2.',
-            f_pivot_note)
-
     wb.close()
+
     buf.seek(0)
     return buf.read()
