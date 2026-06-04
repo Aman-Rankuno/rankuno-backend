@@ -42,7 +42,7 @@ def load_rulebook(domain: str) -> dict:
                     break
 
             # Priority hardcoded per issue type - rulebook priority only used for Table 2 sorting
-            priority = str(row.get("Priority Weightage", "")).strip()
+            priority = str(row.get("Priority", "")).strip()
             if not priority or priority == "nan":
                 priority = "N/A"
 
