@@ -14,6 +14,7 @@ from app.services.masterfile_url_issues import build_url_issues_masterfile
 from app.services.masterfile_page_titles import build_page_titles_masterfile
 from app.services.masterfile_meta_description import build_meta_description_masterfile
 from app.services.masterfile_h1 import generate as generate_h1_masterfile
+from app.services.masterfile_directives import generate as generate_directives_masterfile
 
 router = APIRouter()
 
@@ -205,6 +206,25 @@ def download_masterfile_h1(crawl_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Failed to generate masterfile: {str(e)}")
     domain_safe = crawl.domain.replace("https://", "").replace("http://", "").replace("/", "_").rstrip("_")
     filename = f"{domain_safe}_h1.xlsx"
+    return StreamingResponse(
+        io.BytesIO(excel_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+@router.get("/{crawl_id}/download/masterfile/directives")
+def download_masterfile_directives(crawl_id: str, db: Session = Depends(get_db)):
+    crawl = db.query(Crawl).filter(Crawl.id == crawl_id).first()
+    if not crawl:
+        raise HTTPException(status_code=404, detail="Crawl not found")
+    if not crawl.report_path or not os.path.exists(crawl.report_path):
+        raise HTTPException(status_code=404, detail="Crawl output folder not found")
+    try:
+        excel_bytes = generate_directives_masterfile(crawl.report_path, crawl.domain)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate masterfile: {str(e)}")
+    domain_safe = crawl.domain.replace("https://", "").replace("http://", "").replace("/", "_").rstrip("_")
+    filename = f"{domain_safe}_directives.xlsx"
     return StreamingResponse(
         io.BytesIO(excel_bytes),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
