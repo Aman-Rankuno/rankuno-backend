@@ -16,6 +16,9 @@ from app.services.masterfile_meta_description import build_meta_description_mast
 from app.services.masterfile_h1 import generate as generate_h1_masterfile
 from app.services.masterfile_directives import generate as generate_directives_masterfile
 from app.services.masterfile_sitemaps import generate as generate_sitemaps_masterfile
+from app.services.masterfile_content_issues import generate as generate_content_issues_masterfile
+from app.services.masterfile_duplicate_content import generate as generate_duplicate_content_masterfile
+from app.services.masterfile_custom_search_ga4_gtm import generate as generate_custom_search_ga4_gtm_masterfile
 
 router = APIRouter()
 
@@ -245,6 +248,63 @@ def download_masterfile_sitemaps(crawl_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Failed to generate masterfile: {str(e)}")
     domain_safe = crawl.domain.replace("https://", "").replace("http://", "").replace("/", "_").rstrip("_")
     filename = f"{domain_safe}_sitemaps.xlsx"
+    return StreamingResponse(
+        io.BytesIO(excel_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+@router.get("/{crawl_id}/download/masterfile/content-issues")
+def download_masterfile_content_issues(crawl_id: str, db: Session = Depends(get_db)):
+    crawl = db.query(Crawl).filter(Crawl.id == crawl_id).first()
+    if not crawl:
+        raise HTTPException(status_code=404, detail="Crawl not found")
+    if not crawl.report_path or not os.path.exists(crawl.report_path):
+        raise HTTPException(status_code=404, detail="Crawl output folder not found")
+    try:
+        excel_bytes = generate_content_issues_masterfile(crawl.report_path, crawl.domain)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate masterfile: {str(e)}")
+    domain_safe = crawl.domain.replace("https://", "").replace("http://", "").replace("/", "_").rstrip("_")
+    filename = f"{domain_safe}_content_issues.xlsx"
+    return StreamingResponse(
+        io.BytesIO(excel_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+@router.get("/{crawl_id}/download/masterfile/duplicate-content")
+def download_masterfile_duplicate_content(crawl_id: str, db: Session = Depends(get_db)):
+    crawl = db.query(Crawl).filter(Crawl.id == crawl_id).first()
+    if not crawl:
+        raise HTTPException(status_code=404, detail="Crawl not found")
+    if not crawl.report_path or not os.path.exists(crawl.report_path):
+        raise HTTPException(status_code=404, detail="Crawl output folder not found")
+    try:
+        excel_bytes = generate_duplicate_content_masterfile(crawl.report_path, crawl.domain)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate masterfile: {str(e)}")
+    domain_safe = crawl.domain.replace("https://", "").replace("http://", "").replace("/", "_").rstrip("_")
+    filename = f"{domain_safe}_duplicate_content.xlsx"
+    return StreamingResponse(
+        io.BytesIO(excel_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+@router.get("/{crawl_id}/download/masterfile/custom-search-ga4-gtm")
+def download_masterfile_custom_search_ga4_gtm(crawl_id: str, db: Session = Depends(get_db)):
+    crawl = db.query(Crawl).filter(Crawl.id == crawl_id).first()
+    if not crawl:
+        raise HTTPException(status_code=404, detail="Crawl not found")
+    if not crawl.report_path or not os.path.exists(crawl.report_path):
+        raise HTTPException(status_code=404, detail="Crawl output folder not found")
+    try:
+        excel_bytes = generate_custom_search_ga4_gtm_masterfile(crawl.report_path, crawl.domain)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate masterfile: {str(e)}")
+    domain_safe = crawl.domain.replace("https://", "").replace("http://", "").replace("/", "_").rstrip("_")
+    filename = f"{domain_safe}_custom_search_ga4_gtm.xlsx"
     return StreamingResponse(
         io.BytesIO(excel_bytes),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
