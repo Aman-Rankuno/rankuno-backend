@@ -62,22 +62,17 @@ def generate(report_dir: str, domain: str) -> bytes:
     def fmt(**kw):
         return wb.add_format(kw)
 
-    f_issue_summary = fmt(bold=True, font_size=10, valign="top",
-                          text_wrap=True, border=1)
+    f_issue_summary = fmt(bold=True, font_size=10, valign="top", text_wrap=True, border=1)
     f_section_label = fmt(bold=True, font_size=10)
+    # T1 header row (red bg)
     f_t1_hdr = fmt(bold=True, font_color=WHITE, bg_color=RED,
                    border=1, align="center", valign="vcenter", text_wrap=True)
-    f_t1_lbl = fmt(bold=True, font_color=WHITE, bg_color=RED,
-                   border=1, valign="vcenter")
-    f_t1_val = fmt(bold=True, font_color=WHITE, bg_color=RED,
-                   border=1, align="center", valign="vcenter")
-    f_t1_pct = fmt(bold=True, font_color=WHITE, bg_color=RED,
-                   border=1, align="center", valign="vcenter",
-                   num_format="0.00%")
-    f_t2_title = fmt(bold=True, font_color=WHITE, bg_color=RED,
-                     border=1, valign="vcenter")
-    f_t2_hdr = fmt(bold=True, bg_color=GREY_HDR, border=1,
-                   valign="vcenter", text_wrap=True)
+    # T1 data rows (white bg, black text)
+    f_t1_lbl = fmt(bold=True, border=1, valign="vcenter")
+    f_t1_val = fmt(bold=True, border=1, align="center", valign="vcenter")
+    f_t1_pct = fmt(bold=True, border=1, align="center", valign="vcenter", num_format="0.00%")
+    f_t2_title = fmt(bold=True, font_color=WHITE, bg_color=RED, border=1, valign="vcenter")
+    f_t2_hdr = fmt(bold=True, bg_color=GREY_HDR, border=1, valign="vcenter", text_wrap=True)
     f_t2_cell = fmt(border=1, valign="vcenter")
     f_t2_num = fmt(border=1, valign="vcenter", align="center")
     f_t3_hdr = fmt(bold=True, font_color=WHITE, bg_color=RED,
@@ -96,12 +91,10 @@ def generate(report_dir: str, domain: str) -> bytes:
     ws.set_column(8, 8, 10)
     ws.set_column(9, 9, 15)
 
-    # Load data
     internal_df = _load_csv(report_dir, "internal_all.csv")
     gsc_df = _load_csv(report_dir, "search_console_all.csv")
     ga4_df = _load_csv(report_dir, "analytics_all.csv")
 
-    # GSC lookup
     gsc_map = {}
     if not gsc_df.empty and "Address" in gsc_df.columns:
         for _, row in gsc_df.iterrows():
@@ -112,17 +105,16 @@ def generate(report_dir: str, domain: str) -> bytes:
                     "Clicks": safe_num(row.get("Clicks")),
                 }
 
-    # GA4 lookup
     ga4_map = {}
     if not ga4_df.empty and "Address" in ga4_df.columns:
         for _, row in ga4_df.iterrows():
             addr = str(row.get("Address", "")).strip()
             if addr:
                 ga4_map[addr] = safe_num(
-                    row.get("GA4 Sessions") or row.get("Sessions") or row.get("Organic Sessions") or row.get("Organic sessions")
+                    row.get("GA4 Sessions") or row.get("Sessions") or
+                    row.get("Organic Sessions") or row.get("Organic sessions")
                 )
 
-    # internal_all lookup for Content Type, Status Code, Indexability
     internal_lookup = {}
     if not internal_df.empty and "Address" in internal_df.columns:
         for _, row in internal_df.iterrows():
@@ -139,28 +131,20 @@ def generate(report_dir: str, domain: str) -> bytes:
     except Exception:
         rulebook = []
 
-    # Total indexable 200 HTML for % share base
     internal_filtered = _filter_indexable_200_html(internal_df)
     total_indexable = len(internal_filtered) if not internal_filtered.empty else 0
 
-    # Per-theme total pages
-    theme_totals = {}
-    if not internal_filtered.empty and "Address" in internal_filtered.columns:
-        for _, row in internal_filtered.iterrows():
-            addr = str(row.get("Address", "")).strip()
-            t1, t2, lang, pri = classify_url(addr, rulebook)
-            theme = t1 if t1 else "-"
-            theme_totals[theme] = theme_totals.get(theme, 0) + 1
-
-    # Build Table 3 rows -- filter: Canonical Link Element 1 == Address
+    # Build T3 rows -- filter: self-canonical OR canonical is blank
     t3_rows = []
     for issue_label, csv_name, _ in DIRECTIVES_ISSUES:
         df = _load_csv(report_dir, csv_name)
         if df.empty:
             continue
-        # Filter: self-canonical only
         if "Canonical Link Element 1" in df.columns:
-            df = df[df["Canonical Link Element 1"].astype(str).str.strip() == df["Address"].astype(str).str.strip()]
+            addr_col = df["Address"].astype(str).str.strip()
+            canon_col = df["Canonical Link Element 1"].astype(str).str.strip()
+            mask = (canon_col == addr_col) | (canon_col == "") | (canon_col == "nan") | df["Canonical Link Element 1"].isnull()
+            df = df[mask]
         if df.empty:
             continue
         for _, row in df.iterrows():
@@ -185,10 +169,9 @@ def generate(report_dir: str, domain: str) -> bytes:
                 "sessions": sessions,
             })
 
-    # Sort T3 by Impressions descending
     t3_rows.sort(key=lambda r: (r["impressions"] is None, -(r["impressions"] or 0)))
 
-    # Build Table 2 theme data
+    # Build T2 theme data
     R_T2_DATA_START = 15
     theme_data = {}
     for r in t3_rows:
@@ -197,7 +180,6 @@ def generate(report_dir: str, domain: str) -> bytes:
             theme_data[th] = {"Noindex": 0, "Nofollow": 0, "priority_basis": "N/A"}
         theme_data[th][r["error_type"]] += 1
 
-    # Assign priority from rulebook
     for _, row in (internal_filtered.iterrows() if not internal_filtered.empty else iter([])):
         addr = str(row.get("Address", "")).strip()
         t1, t2, lang, pri = classify_url(addr, rulebook)
@@ -225,63 +207,56 @@ def generate(report_dir: str, domain: str) -> bytes:
     ws.set_row(3, 40)
     summary_text = (
         "Issue Summary:\n"
-        "1. Noindex - URLs with a noindex directive, instructing search engines not to index the page "
-        "and exclude it from search results.\n"
-        "2. Nofollow - URLs with a nofollow directive, instructing search engines not to follow "
-        "links on the page."
+        "1. Noindex - URLs containing a noindex directive, instructing search engines not to include "
+        "the page in search engine results pages (SERPs).\n"
+        "2. Nofollow - URLs containing a nofollow directive, instructing search engines not to follow "
+        "links present on the page or pass link equity through them."
     )
     ws.merge_range(1, 0, 3, 9, summary_text, f_issue_summary)
 
-    # Row 5: Summary Table label (row 6 in template = index 5)
     ws.write(5, 0, "Summary Table ", f_section_label)
     ws.write(6, 0, "Table 1")
 
-    # Table 1 headers (3 cols)
+    # Table 1 -- only header row is red, data rows are white
     t1_headers = ["Meta Robot Tags", "No Index", "No Follow"]
     for ci, h in enumerate(t1_headers):
         ws.write(7, ci, h, f_t1_hdr)
 
-    # Issue Priority row
     t1_priorities = ["Issue Priority", "High", "Medium"]
     for ci, v in enumerate(t1_priorities):
-        ws.write(8, ci, v, f_t1_hdr)
+        ws.write(8, ci, v, f_t1_lbl)
 
-    # #Affected URLs row
     ws.write(9, 0, "#Affected URLs", f_t1_lbl)
     col_a = "A{}:A1048576".format(t3_data_excel_row)
     ws.write_formula(9, 1, '=COUNTIF({},"Noindex")'.format(col_a), f_t1_val)
     ws.write_formula(9, 2, '=COUNTIF({},"Nofollow")'.format(col_a), f_t1_val)
 
-    # % share row
     ws.set_row(10, 24)
     ws.write(10, 0, "% share against Total  URLs Crawled", f_t1_lbl)
     total_ref = total_indexable if total_indexable > 0 else 1
     ws.write_formula(10, 1, "=B10/{}".format(total_ref), f_t1_pct)
     ws.write_formula(10, 2, "=C10/{}".format(total_ref), f_t1_pct)
 
-    # Table 2
+    # Table 2 -- 5 cols: Page Theme 1 | Priority Basis | Priority | No Index | No Follow
     ws.write(12, 0, "Table 2")
     ws.set_row(13, 16)
-    ws.merge_range(13, 0, 13, 5, "Page Theme Wise Meta Robot Analysis ", f_t2_title)
+    ws.merge_range(13, 0, 13, 4, "Page Theme Wise Meta Robot Analysis ", f_t2_title)
 
-    t2_headers = ["Page Theme 1", "Priority Basis Page Theme 1", "Total Pages",
-                  "Priority", "No Index", "No Follow"]
+    t2_headers = ["Page Theme 1", "Priority Basis Page Theme 1", "Priority", "No Index", "No Follow"]
     for ci, h in enumerate(t2_headers):
         ws.write(14, ci, h, f_t2_hdr)
 
     for ri, (theme, counts) in enumerate(t2_rows_sorted):
         rr = R_T2_DATA_START + ri
         pri_basis = counts["priority_basis"]
-        total_pages = theme_totals.get(theme, 0)
         t3_a = "A{}:A1048576".format(t3_data_excel_row)
         t3_c = "C{}:C1048576".format(t3_data_excel_row)
         theme_cell = '"{}"'.format(theme)
         ws.write(rr, 0, theme, f_t2_cell)
         ws.write(rr, 1, pri_basis, f_t2_cell)
-        ws.write(rr, 2, total_pages, f_t2_num)
-        ws.write(rr, 3, pri_basis, f_t2_cell)
-        ws.write_formula(rr, 4, '=COUNTIFS({},"{}", {},{})'.format(t3_a, "Noindex", t3_c, theme_cell), f_t2_num)
-        ws.write_formula(rr, 5, '=COUNTIFS({},"{}", {},{})'.format(t3_a, "Nofollow", t3_c, theme_cell), f_t2_num)
+        ws.write(rr, 2, pri_basis, f_t2_cell)
+        ws.write_formula(rr, 3, '=COUNTIFS({},"{}", {},{})'.format(t3_a, "Noindex", t3_c, theme_cell), f_t2_num)
+        ws.write_formula(rr, 4, '=COUNTIFS({},"{}", {},{})'.format(t3_a, "Nofollow", t3_c, theme_cell), f_t2_num)
 
     # Table 3
     ws.write(R_TABLE3_LABEL, 0, "Table 3")
