@@ -7,12 +7,22 @@ from app.services.rulebook import load_rulebook, classify_url
 
 PRIORITY_ORDER = {"High": 0, "Medium": 1, "Low": 2, "N/A": 3}
 
-# Custom extractor column name -> friendly label
-EXTRACTOR_COLS = [
-    ("GA4", "GA4 Available"),
-    ("GTM Head", "GTM Available in Head?"),
-    ("GTM Body", "GTM Available in Body?"),
+# 12 extractor columns. Tuple = (SF custom_extraction_all CSV column name, T1/T2 display label, T3 display label)
+EXTRACTORS = [
+    ("OG Type",             "OG Type",             "OG Type"),
+    ("OG Title",            "OG Title",            "OG Title"),
+    ("OG Image",            "OG Image",            "OG Image"),
+    ("OG Image Width",      "OG Image Width",      "OG Image Width"),
+    ("OG Image Height",     "OG Image Height",     "OG Image Height"),
+    ("OG Description",      "OG Description",      "OG Description"),
+    ("OG Sitename",         "OG Sitename",         "OG Sitename"),
+    ("Twitter Card",        "Twitter Card",        "Twitter Card"),
+    ("Twitter Title",       "Twitter Title",       "Twitter Title"),
+    ("Twitter Site",        "Twitter Site",        "Twitter Site"),
+    ("Twitter Description", "Twitter Description", "Twitter Description"),
+    ("Twitter Image",       "Twitter Image",       "Twitter Image"),
 ]
+NUM_EXTRACTORS = len(EXTRACTORS)  # 12
 
 
 def safe_num(v):
@@ -29,7 +39,6 @@ def _clean(v):
 
 
 def _yes_no(v):
-    """Yes if extractor value is non-empty, No otherwise."""
     if v is None:
         return "No"
     s = str(v).strip()
@@ -62,10 +71,22 @@ def _filter_indexable_200_html(df):
     return out
 
 
+def _col_letter(idx_zero):
+    # 0 -> A, 25 -> Z, 26 -> AA, etc.
+    n = idx_zero
+    s = ""
+    while True:
+        s = chr(ord("A") + (n % 26)) + s
+        n = n // 26 - 1
+        if n < 0:
+            break
+    return s
+
+
 def generate(report_dir: str, domain: str) -> bytes:
     buf = io.BytesIO()
     wb = xlsxwriter.Workbook(buf, {"in_memory": True, "nan_inf_to_errors": True})
-    ws = wb.add_worksheet("Custom Search GA4 GTM")
+    ws = wb.add_worksheet("Custom Search OG Twitter")
 
     RED = "#FF0000"
     GREY_HDR = "#F2F2F2"
@@ -91,18 +112,17 @@ def generate(report_dir: str, domain: str) -> bytes:
     f_t3_cell = fmt(border=1, valign="vcenter", text_wrap=True)
     f_t3_num = fmt(border=1, valign="vcenter", align="center")
 
-    ws.set_column(0, 0, 45)
-    ws.set_column(1, 1, 18)
-    ws.set_column(2, 2, 18)
-    ws.set_column(3, 3, 25)
-    ws.set_column(4, 4, 12)
-    ws.set_column(5, 5, 14)
-    ws.set_column(6, 6, 16)
-    ws.set_column(7, 7, 22)
-    ws.set_column(8, 8, 22)
-    ws.set_column(9, 9, 13)
-    ws.set_column(10, 10, 10)
-    ws.set_column(11, 11, 16)
+    # Column widths
+    ws.set_column(0, 0, 45)   # Address
+    ws.set_column(1, 1, 18)   # Page Theme 1
+    ws.set_column(2, 2, 18)   # Page Theme 2
+    ws.set_column(3, 3, 25)   # Content Type
+    ws.set_column(4, 4, 12)   # Status Code
+    ws.set_column(5, 5, 14)   # Indexability
+    ws.set_column(6, 17, 16)  # 12 extractor cols
+    ws.set_column(18, 18, 13) # Impressions
+    ws.set_column(19, 19, 10) # Clicks
+    ws.set_column(20, 20, 16) # Organic Sessions
 
     internal_df = _load_csv(report_dir, "internal_all.csv")
     gsc_df = _load_csv(report_dir, "search_console_all.csv")
@@ -129,7 +149,6 @@ def generate(report_dir: str, domain: str) -> bytes:
                     row.get("Organic Sessions") or row.get("Organic sessions")
                 )
 
-    # internal_all lookup for Content Type, Status Code, Indexability
     internal_lookup = {}
     if not internal_df.empty and "Address" in internal_df.columns:
         for _, row in internal_df.iterrows():
@@ -149,21 +168,11 @@ def generate(report_dir: str, domain: str) -> bytes:
     internal_filtered = _filter_indexable_200_html(internal_df)
     total_indexable = len(internal_filtered) if not internal_filtered.empty else 0
 
-    theme_totals = {}
-    if not internal_filtered.empty and "Address" in internal_filtered.columns:
-        for _, row in internal_filtered.iterrows():
-            addr = str(row.get("Address", "")).strip()
-            t1, t2, lang, pri = classify_url(addr, rulebook)
-            theme = t1 if t1 else "-"
-            theme_totals[theme] = theme_totals.get(theme, 0) + 1
-
-    # Filter custom_extraction_all to indexable 200 HTML only
-    # The CSV may not have Indexability/Status/Content Type cols, so we filter via internal_lookup
     valid_addrs = set(internal_filtered["Address"].astype(str).str.strip().tolist()) if not internal_filtered.empty else set()
 
-    # Build T3 rows from custom_extraction_all
+    # Build T3 rows
     # Only build if at least one configured extractor column actually exists in the CSV
-    any_extractor_present = any(col in extraction_df.columns for col in ("GA4", "GTM Head", "GTM Body"))
+    any_extractor_present = any(csv_col in extraction_df.columns for csv_col, _, _ in EXTRACTORS)
     t3_rows = []
     if any_extractor_present and not extraction_df.empty and "Address" in extraction_df.columns:
         for _, row in extraction_df.iterrows():
@@ -172,9 +181,12 @@ def generate(report_dir: str, domain: str) -> bytes:
                 continue
             t1, t2, lang, pri = classify_url(addr, rulebook)
             il = internal_lookup.get(addr, {})
-            ga4_avail = _yes_no(row.get("GA4")) if "GA4" in extraction_df.columns else "-"
-            gtm_head = _yes_no(row.get("GTM Head")) if "GTM Head" in extraction_df.columns else "-"
-            gtm_body = _yes_no(row.get("GTM Body")) if "GTM Body" in extraction_df.columns else "-"
+            extractor_vals = []
+            for csv_col, _, _ in EXTRACTORS:
+                if csv_col in extraction_df.columns:
+                    extractor_vals.append(_yes_no(row.get(csv_col)))
+                else:
+                    extractor_vals.append("-")
             gsc = gsc_map.get(addr, {})
             sessions = ga4_map.get(addr)
             t3_rows.append({
@@ -184,9 +196,7 @@ def generate(report_dir: str, domain: str) -> bytes:
                 "content_type": il.get("content_type", "-"),
                 "status_code": il.get("status_code", "-"),
                 "indexability": il.get("indexability", "-"),
-                "ga4_avail": ga4_avail,
-                "gtm_head": gtm_head,
-                "gtm_body": gtm_body,
+                "extractors": extractor_vals,
                 "impressions": gsc.get("Impressions"),
                 "clicks": gsc.get("Clicks"),
                 "sessions": sessions,
@@ -194,19 +204,19 @@ def generate(report_dir: str, domain: str) -> bytes:
 
     t3_rows.sort(key=lambda r: (r["impressions"] is None, -(r["impressions"] or 0)))
 
-    # Build T2 theme data — affected = "No" or "-" (missing tag)
-    R_T2_DATA_START = 16
+    # T2 theme aggregation
+    R_T2_DATA_START = 15  # Excel row 16
     theme_data = {}
     for r in t3_rows:
         th = r["theme1"]
         if th not in theme_data:
-            theme_data[th] = {"GA4 Available": 0, "GTM Head": 0, "GTM Body": 0, "priority_basis": "N/A"}
-        if r["ga4_avail"] in ("No", "-"):
-            theme_data[th]["GA4 Available"] += 1
-        if r["gtm_head"] in ("No", "-"):
-            theme_data[th]["GTM Head"] += 1
-        if r["gtm_body"] in ("No", "-"):
-            theme_data[th]["GTM Body"] += 1
+            theme_data[th] = {
+                "counts": [0] * NUM_EXTRACTORS,
+                "priority_basis": "N/A",
+            }
+        for i, ev in enumerate(r["extractors"]):
+            if ev in ("No", "-"):
+                theme_data[th]["counts"][i] += 1
 
     for _, row in (internal_filtered.iterrows() if not internal_filtered.empty else iter([])):
         addr = str(row.get("Address", "")).strip()
@@ -223,107 +233,111 @@ def generate(report_dir: str, domain: str) -> bytes:
     )
 
     t2_count = len(t2_rows_sorted)
-    R_TABLE3_LABEL = R_T2_DATA_START + t2_count + 1
+    R_TABLE3_LABEL = R_T2_DATA_START + t2_count + 1  # blank row + label
     R_T3_HDR = R_TABLE3_LABEL + 1
     R_T3_DATA_START = R_T3_HDR + 1
-    t3_data_excel_row = R_T3_DATA_START + 1
+    t3_data_excel_row = R_T3_DATA_START + 1  # 1-indexed Excel row
 
-    # Issue Summary rows 2-4
+    # Issue Summary rows 2-4 merged A:U
     ws.set_row(0, 15)
     ws.set_row(1, 55)
     ws.set_row(2, 40)
     ws.set_row(3, 40)
     summary_text = (
         "Issue Summary:\n"
-        "1. GA4 Available - URLs missing the GA4 tracking tag, which prevents accurate measurement of user behavior, "
-        "conversions, and traffic sources in Google Analytics 4.\n"
-        "2. GTM Available in Head / Body - URLs missing the Google Tag Manager snippet in the <head> or <body>, "
-        "which prevents tag deployment and event tracking across the site."
+        "1. Open Graph tags (og:type, og:title, og:image, og:image:width, og:image:height, og:description, og:site_name) - "
+        "URLs missing OG meta tags, which prevents rich previews when shared on Facebook, LinkedIn, and other platforms.\n"
+        "2. Twitter Card tags (twitter:card, twitter:title, twitter:site, twitter:description, twitter:image) - "
+        "URLs missing Twitter Card meta tags, which prevents rich card previews on Twitter/X when links are shared."
     )
-    ws.merge_range(1, 0, 3, 11, summary_text, f_issue_summary)
+    ws.merge_range(1, 0, 3, 20, summary_text, f_issue_summary)
 
-    # Table 1
-    ws.write(7, 0, "Table 1")
-    t1_headers = ["Custom Extraction Type", "GA4 Available", "GTM Available - Head", "GTM Available - Body"]
-    for ci, h in enumerate(t1_headers):
-        ws.write(8, ci, h, f_t1_hdr)
+    # Table 1 (rows 7-11, Excel rows 8-12)
+    ws.write(6, 0, "Table 1")
+    # T1 col A label + 12 extractor headers in cols B..M (idx 1..12)
+    ws.write(7, 0, "Custom Extraction Type", f_t1_hdr)
+    for i, (_, t1_label, _) in enumerate(EXTRACTORS):
+        ws.write(7, i + 1, t1_label, f_t1_hdr)
 
-    t1_priorities = ["Issue Priority", "High", "High", "High"]
-    for ci, v in enumerate(t1_priorities):
-        ws.write(9, ci, v, f_t1_hdr)
+    # Row 9 (idx 8): Issue Priority
+    ws.write(8, 0, "Issue Priority", f_t1_hdr)
+    for i in range(NUM_EXTRACTORS):
+        ws.write(8, i + 1, "Low", f_t1_hdr)
 
-    ws.write(10, 0, "#Affected URLs", f_t1_lbl)
-    # Affected = "No" or "-" in cols G/H/I of T3
-    col_g = "G{}:G1048576".format(t3_data_excel_row)
-    col_h = "H{}:H1048576".format(t3_data_excel_row)
-    col_i = "I{}:I1048576".format(t3_data_excel_row)
-    ws.write_formula(10, 1, '=COUNTIF({},"No")+COUNTIF({},"-")'.format(col_g, col_g), f_t1_val)
-    ws.write_formula(10, 2, '=COUNTIF({},"No")+COUNTIF({},"-")'.format(col_h, col_h), f_t1_val)
-    ws.write_formula(10, 3, '=COUNTIF({},"No")+COUNTIF({},"-")'.format(col_i, col_i), f_t1_val)
+    # Row 10 (idx 9): #Affected URLs formulas
+    ws.write(9, 0, "#Affected URLs", f_t1_lbl)
+    for i in range(NUM_EXTRACTORS):
+        # T3 col index for this extractor is 6 + i (G + i)
+        t3_col_letter = _col_letter(6 + i)
+        rng = "{0}{1}:{0}1048576".format(t3_col_letter, t3_data_excel_row)
+        ws.write_formula(9, i + 1,
+                         '=COUNTIF({0},"No")+COUNTIF({0},"-")'.format(rng),
+                         f_t1_val)
 
-    ws.set_row(11, 24)
-    ws.write(11, 0, "% share against Total  URLs Crawled", f_t1_lbl)
+    # Row 11 (idx 10): % share
+    ws.set_row(10, 24)
+    ws.write(10, 0, "% share against Total  URLs Crawled", f_t1_lbl)
     total_ref = total_indexable if total_indexable > 0 else 1
-    ws.write_formula(11, 1, "=B11/{}".format(total_ref), f_t1_pct)
-    ws.write_formula(11, 2, "=C11/{}".format(total_ref), f_t1_pct)
-    ws.write_formula(11, 3, "=D11/{}".format(total_ref), f_t1_pct)
+    for i in range(NUM_EXTRACTORS):
+        t1_col_letter = _col_letter(i + 1)  # B, C, D, ... M
+        ws.write_formula(10, i + 1,
+                         "={0}10/{1}".format(t1_col_letter, total_ref),
+                         f_t1_pct)
 
-    # Table 2
-    ws.write(13, 0, "Table 2")
-    ws.set_row(14, 16)
-    ws.merge_range(14, 0, 14, 4, "Page Theme Wise URL Analysis ", f_t2_title)
+    # Table 2 (row 13, Excel row 14)
+    ws.write(12, 0, "Table 2")
+    ws.set_row(13, 16)
+    # T2 spans cols A..N (idx 0..13) = theme + priority + 12 extractors
+    ws.merge_range(13, 0, 13, 13, "Page Theme Wise URL Analysis ", f_t2_title)
 
-    t2_headers = ["Page Theme 1", "Priority Basis Page Theme 1",
-                  "GA4 Available", "GTM Available - Head", "GTM Available - Body"]
-    for ci, h in enumerate(t2_headers):
-        ws.write(15, ci, h, f_t2_hdr)
+    # T2 headers (row 14, idx 14)
+    ws.write(14, 0, "Page Theme 1", f_t2_hdr)
+    ws.write(14, 1, "Priority Basis Page Theme 1", f_t2_hdr)
+    for i, (_, t2_label, _) in enumerate(EXTRACTORS):
+        ws.write(14, i + 2, t2_label, f_t2_hdr)
 
-    for ri, (theme, counts) in enumerate(t2_rows_sorted):
+    # T2 data rows
+    for ri, (theme, info) in enumerate(t2_rows_sorted):
         rr = R_T2_DATA_START + ri
-        pri_basis = counts["priority_basis"]
-        t3_b = "B{}:B1048576".format(t3_data_excel_row)
-        t3_g = "G{}:G1048576".format(t3_data_excel_row)
-        t3_h = "H{}:H1048576".format(t3_data_excel_row)
-        t3_i = "I{}:I1048576".format(t3_data_excel_row)
-        theme_cell = '"{}"'.format(theme)
+        pri_basis = info["priority_basis"]
         ws.write(rr, 0, theme, f_t2_cell)
         ws.write(rr, 1, pri_basis, f_t2_cell)
-        # COUNTIFS for GA4 affected (No or -) per theme
-        ws.write_formula(rr, 2,
-                         '=COUNTIFS({},"No",{},{})+COUNTIFS({},"-",{},{})'.format(t3_g, t3_b, theme_cell, t3_g, t3_b, theme_cell),
-                         f_t2_num)
-        ws.write_formula(rr, 3,
-                         '=COUNTIFS({},"No",{},{})+COUNTIFS({},"-",{},{})'.format(t3_h, t3_b, theme_cell, t3_h, t3_b, theme_cell),
-                         f_t2_num)
-        ws.write_formula(rr, 4,
-                         '=COUNTIFS({},"No",{},{})+COUNTIFS({},"-",{},{})'.format(t3_i, t3_b, theme_cell, t3_i, t3_b, theme_cell),
-                         f_t2_num)
+        t3_b = "B{0}:B1048576".format(t3_data_excel_row)
+        theme_cell = '"{0}"'.format(theme)
+        for i in range(NUM_EXTRACTORS):
+            t3_col_letter = _col_letter(6 + i)
+            t3_rng = "{0}{1}:{0}1048576".format(t3_col_letter, t3_data_excel_row)
+            ws.write_formula(
+                rr, i + 2,
+                '=COUNTIFS({0},"No",{1},{2})+COUNTIFS({0},"-",{1},{2})'.format(t3_rng, t3_b, theme_cell),
+                f_t2_num,
+            )
 
-    # Table 3
+    # Table 3 label and headers
     ws.write(R_TABLE3_LABEL, 0, "Table 3")
     t3_headers = [
         "Address", "Page Theme 1", "Page Theme 2", "Content Type",
-        "Status Code", "Indexability", "GA4 Available",
-        "GTM Available in Head?", "GTM Available in Body?",
+        "Status Code", "Indexability",
+    ] + [t3_label for _, _, t3_label in EXTRACTORS] + [
         "Impressions", "Clicks", "Organic Sessions",
     ]
     for ci, h in enumerate(t3_headers):
         ws.write(R_T3_HDR, ci, h, f_t3_hdr)
 
+    # T3 data
     for ri, row in enumerate(t3_rows):
         rr = R_T3_DATA_START + ri
-        ws.write(rr, 0,  row["address"],      f_t3_cell)
-        ws.write(rr, 1,  row["theme1"],       f_t3_cell)
-        ws.write(rr, 2,  row["theme2"],       f_t3_cell)
-        ws.write(rr, 3,  row["content_type"], f_t3_cell)
-        ws.write(rr, 4,  row["status_code"],  f_t3_num)
-        ws.write(rr, 5,  row["indexability"], f_t3_cell)
-        ws.write(rr, 6,  row["ga4_avail"],    f_t3_cell)
-        ws.write(rr, 7,  row["gtm_head"],     f_t3_cell)
-        ws.write(rr, 8,  row["gtm_body"],     f_t3_cell)
-        ws.write(rr, 9,  row["impressions"],  f_t3_num)
-        ws.write(rr, 10, row["clicks"],       f_t3_num)
-        ws.write(rr, 11, row["sessions"],     f_t3_num)
+        ws.write(rr, 0, row["address"],      f_t3_cell)
+        ws.write(rr, 1, row["theme1"],       f_t3_cell)
+        ws.write(rr, 2, row["theme2"],       f_t3_cell)
+        ws.write(rr, 3, row["content_type"], f_t3_cell)
+        ws.write(rr, 4, row["status_code"],  f_t3_num)
+        ws.write(rr, 5, row["indexability"], f_t3_cell)
+        for i, ev in enumerate(row["extractors"]):
+            ws.write(rr, 6 + i, ev, f_t3_cell)
+        ws.write(rr, 18, row["impressions"], f_t3_num)
+        ws.write(rr, 19, row["clicks"],      f_t3_num)
+        ws.write(rr, 20, row["sessions"],    f_t3_num)
 
     wb.close()
     buf.seek(0)

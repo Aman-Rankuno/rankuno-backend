@@ -8,10 +8,10 @@ from app.services.rulebook import load_rulebook, classify_url
 PRIORITY_ORDER = {"High": 0, "Medium": 1, "Low": 2, "N/A": 3}
 
 H1_ISSUES = [
-    ("Missing",            "h1_missing.csv",            "High"),
-    ("Duplicate",          "h1_duplicate.csv",          "Low"),
-    ("Over 70 Characters", "h1_over_70_characters.csv", "Low"),
-    ("Multiple",           "h1_multiple.csv",           "Low"),
+    ("Missing",           "h1_missing.csv",           "High"),
+    ("Duplicate",         "h1_duplicate.csv",          "Low"),
+    ("Over 70 Characters","h1_over_70_characters.csv", "Low"),
+    ("Multiple",          "h1_multiple.csv",           "Low"),
 ]
 
 
@@ -64,8 +64,7 @@ def generate(report_dir: str, domain: str) -> bytes:
     def fmt(**kw):
         return wb.add_format(kw)
 
-    f_issue_summary = fmt(bold=True, font_size=10, valign="top",
-                          text_wrap=True, border=1)
+    f_issue_summary = fmt(bold=True, font_size=10, valign="top", text_wrap=True, border=1)
     f_section_label = fmt(bold=True, font_size=10)
     f_t1_hdr = fmt(bold=True, font_color=WHITE, bg_color=RED,
                    border=1, align="center", valign="vcenter", text_wrap=True)
@@ -74,8 +73,7 @@ def generate(report_dir: str, domain: str) -> bytes:
     f_t1_val = fmt(bold=True, font_color=WHITE, bg_color=RED,
                    border=1, align="center", valign="vcenter")
     f_t1_pct = fmt(bold=True, font_color=WHITE, bg_color=RED,
-                   border=1, align="center", valign="vcenter",
-                   num_format="0.00%")
+                   border=1, align="center", valign="vcenter", num_format="0.00%")
     f_t2_title = fmt(bold=True, font_color=WHITE, bg_color=RED,
                      border=1, valign="vcenter")
     f_t2_hdr = fmt(bold=True, bg_color=GREY_HDR, border=1,
@@ -88,21 +86,21 @@ def generate(report_dir: str, domain: str) -> bytes:
     f_t3_num = fmt(border=1, valign="vcenter", align="center")
 
     ws.set_column(0, 0, 20)
-    ws.set_column(1, 1, 22)
-    ws.set_column(2, 2, 16)
-    ws.set_column(3, 3, 22)
-    ws.set_column(4, 4, 15)
-    ws.set_column(5, 5, 17)
-    ws.set_column(6, 6, 15)
-    ws.set_column(7, 7, 15)
-    ws.set_column(8, 8, 12)
-    ws.set_column(9, 9, 30)
+    ws.set_column(1, 1, 45)
+    ws.set_column(2, 2, 18)
+    ws.set_column(3, 3, 18)
+    ws.set_column(4, 4, 25)
+    ws.set_column(5, 5, 12)
+    ws.set_column(6, 6, 14)
+    ws.set_column(7, 7, 18)
+    ws.set_column(8, 8, 10)
+    ws.set_column(9, 9, 35)
     ws.set_column(10, 10, 12)
-    ws.set_column(11, 11, 30)
+    ws.set_column(11, 11, 35)
     ws.set_column(12, 12, 12)
     ws.set_column(13, 13, 13)
     ws.set_column(14, 14, 10)
-    ws.set_column(15, 15, 10)
+    ws.set_column(15, 15, 15)
 
     internal_df = _load_csv(report_dir, "internal_all.csv")
     gsc_df = _load_csv(report_dir, "search_console_all.csv")
@@ -124,10 +122,10 @@ def generate(report_dir: str, domain: str) -> bytes:
             addr = str(row.get("Address", "")).strip()
             if addr:
                 ga4_map[addr] = safe_num(
-                    row.get("GA4 Sessions") or row.get("Sessions") or row.get("Organic Sessions") or row.get("Organic sessions")
+                    row.get("GA4 Sessions") or row.get("Sessions") or
+                    row.get("Organic Sessions") or row.get("Organic sessions")
                 )
 
-    # Build internal_all lookup for Content Type, Status Code, Indexability
     internal_lookup = {}
     if not internal_df.empty and "Address" in internal_df.columns:
         for _, row in internal_df.iterrows():
@@ -137,7 +135,7 @@ def generate(report_dir: str, domain: str) -> bytes:
                     "content_type": _clean(row.get("Content Type", "")),
                     "status_code": _clean(row.get("Status Code", "")),
                     "indexability": _clean(row.get("Indexability", "")),
-                    "idx_status": _clean(row.get("Indexability Status", "")),
+                    "indexability_status": _clean(row.get("Indexability Status", "")),
                 }
 
     try:
@@ -156,6 +154,7 @@ def generate(report_dir: str, domain: str) -> bytes:
             theme = t1 if t1 else "-"
             theme_totals[theme] = theme_totals.get(theme, 0) + 1
 
+    # Build T3 rows
     t3_rows = []
     for issue_label, csv_name, _ in H1_ISSUES:
         df = _load_csv(report_dir, csv_name)
@@ -169,12 +168,7 @@ def generate(report_dir: str, domain: str) -> bytes:
             content_type = _il.get("content_type") or _clean(row.get("Content Type", ""))
             status_code = _il.get("status_code") or _clean(row.get("Status Code", ""))
             indexability = _il.get("indexability") or _clean(row.get("Indexability", ""))
-            idx_status = _il.get("idx_status") or _clean(row.get("Indexability Status", ""))
-            occurrence = safe_num(row.get("Occurrences") or row.get("Occurance") or row.get("Occurrence"))
-            h1_1 = _clean(row.get("H1-1", ""))
-            h1_1_len = safe_num(row.get("H1-1 Length"))
-            h1_2 = _clean(row.get("H1-2", ""))
-            h1_2_len = safe_num(row.get("H1-2 Length"))
+            idx_status = _il.get("indexability_status") or _clean(row.get("Indexability Status", ""))
             gsc = gsc_map.get(addr, {})
             sessions = ga4_map.get(addr)
             t3_rows.append({
@@ -186,11 +180,11 @@ def generate(report_dir: str, domain: str) -> bytes:
                 "status_code": status_code,
                 "indexability": indexability,
                 "idx_status": idx_status,
-                "occurrence": occurrence,
-                "h1_1": h1_1,
-                "h1_1_len": h1_1_len,
-                "h1_2": h1_2,
-                "h1_2_len": h1_2_len,
+                "occurrence": safe_num(row.get("Occurrences")) or safe_num(row.get("Occurrence")) or "-",
+                "h1_1": _clean(row.get("H1-1", "")),
+                "h1_1_len": safe_num(row.get("H1-1 Length")) or "-",
+                "h1_2": _clean(row.get("H1-2", "")),
+                "h1_2_len": safe_num(row.get("H1-2 Length")) or "-",
                 "impressions": gsc.get("Impressions"),
                 "clicks": gsc.get("Clicks"),
                 "sessions": sessions,
@@ -198,14 +192,14 @@ def generate(report_dir: str, domain: str) -> bytes:
 
     t3_rows.sort(key=lambda r: (r["impressions"] is None, -(r["impressions"] or 0)))
 
+    # Build T2 theme data
     R_T2_DATA_START = 17
     theme_data = {}
     for r in t3_rows:
         th = r["theme1"]
         if th not in theme_data:
             theme_data[th] = {"Missing": 0, "Duplicate": 0,
-                               "Over 70 Characters": 0, "Multiple": 0,
-                               "priority_basis": "N/A"}
+                               "Over 70 Characters": 0, "Multiple": 0, "priority_basis": "N/A"}
         theme_data[th][r["error_type"]] += 1
 
     for _, row in (internal_filtered.iterrows() if not internal_filtered.empty else iter([])):
@@ -228,53 +222,51 @@ def generate(report_dir: str, domain: str) -> bytes:
     R_T3_DATA_START = R_T3_HDR + 1
     t3_data_excel_row = R_T3_DATA_START + 1
 
-    # Issue Summary rows 1-6 (0-indexed)
+    # Issue Summary rows 2-4
     ws.set_row(0, 15)
-    ws.set_row(1, 60)
-    ws.set_row(2, 45)
-    ws.set_row(3, 45)
+    ws.set_row(1, 55)
+    ws.set_row(2, 40)
+    ws.set_row(3, 40)
     summary_text = (
         "Issue Summary:\n"
-        "1. Missing - URLs missing an H1 tag, leaving search engines without a primary heading signal "
-        "which may reduce relevance and topical clarity.\n"
-        "2. Duplicate - URLs sharing the same H1 as other pages, making it difficult for search engines "
-        "to differentiate page relevance and uniqueness.\n"
-        "3. Over 70 Characters - URLs with H1 tags exceeding the recommended character limit, "
-        "which may reduce readability and keyword focus.\n"
-        "4. Multiple - URLs containing multiple H1 tags, potentially causing search engines "
-        "to misinterpret the primary heading of the page."
+        "1. Missing - URLs missing a <title> tag, resulting in search engines generating their own title for "
+        "search results, which may reduce relevance and click-through rates.\n"
+        "2. Duplicate - URLs sharing the same meta title as other pages on the website, making it difficult "
+        "for search engines to differentiate page relevance and uniqueness.\n"
+        "3. Over 70 Characters - URLs with meta titles exceeding the recommended character limit, which may "
+        "result in truncation within search engine results pages (SERPs).\n"
+        "4. Multiple - URLs containing multiple <title> tags, potentially causing search engines to "
+        "misinterpret the preferred page title."
     )
     ws.merge_range(1, 0, 3, 15, summary_text, f_issue_summary)
 
     ws.write(7, 0, "Summary Table ", f_section_label)
     ws.write(8, 0, "Table 1")
 
-    t1_headers = ["H1 Issue Types ", "Missing", "Duplicate", "Over 70 Characters", "Multiple", "Total Page"]
+    # Table 1 headers (5 cols, NO Total Pages)
+    t1_headers = ["H1 Issue Types", "Missing", "Duplicate", "Over 70 Characters", "Multiple"]
     for ci, h in enumerate(t1_headers):
         ws.write(9, ci, h, f_t1_hdr)
 
-    t1_priorities = ["Issue Priority", "High", "Low", "Low", "Low", "-"]
+    t1_priorities = ["Issue Priority", "High", "Low", "Low", "Low"]
     for ci, v in enumerate(t1_priorities):
         ws.write(10, ci, v, f_t1_hdr)
 
     ws.write(11, 0, "#Affected URLs", f_t1_lbl)
-    issue_cols = {"Missing": 1, "Duplicate": 2, "Over 70 Characters": 3, "Multiple": 4}
-    for label, ci in issue_cols.items():
-        col_a = "A{}:A1048576".format(t3_data_excel_row)
-        ws.write_formula(11, ci, '=COUNTIF({},"{}")'.format(col_a, label), f_t1_val)
-    ws.write_formula(11, 5, "=MAX(B12:E12)", f_t1_val)
+    col_a = "A{}:A1048576".format(t3_data_excel_row)
+    for ci, label in enumerate(["Missing", "Duplicate", "Over 70 Characters", "Multiple"], 1):
+        ws.write_formula(11, ci, '=COUNTIF({},"{}") '.format(col_a, label), f_t1_val)
 
     ws.set_row(12, 24)
     ws.write(12, 0, "% share against Total  URLs Crawled", f_t1_lbl)
     total_ref = total_indexable if total_indexable > 0 else 1
-    for label, ci in issue_cols.items():
-        count_cell = "{}{}".format(chr(64 + ci + 1), 12)
-        ws.write_formula(12, ci, "={}/{}".format(count_cell, total_ref), f_t1_pct)
-    ws.write(12, 5, None, f_t1_pct)
+    for ci, col_letter in enumerate(["B", "C", "D", "E"], 1):
+        ws.write_formula(12, ci, "={}12/{}".format(col_letter, total_ref), f_t1_pct)
 
+    # Table 2
     ws.write(14, 0, "Table 2")
     ws.set_row(15, 16)
-    ws.merge_range(15, 0, 15, 7, "Page Theme Wise H1 Analysis ", f_t2_title)
+    ws.merge_range(15, 0, 15, 6, "Page Theme Wise H1 Analysis ", f_t2_title)
 
     t2_headers = ["Page Theme 1", "Priority Basis Page Theme 1", "Total Pages",
                   "Missing", "Duplicate", "Over 70 Characters", "Multiple"]
@@ -291,12 +283,12 @@ def generate(report_dir: str, domain: str) -> bytes:
         ws.write(rr, 0, theme, f_t2_cell)
         ws.write(rr, 1, pri_basis, f_t2_cell)
         ws.write(rr, 2, total_pages, f_t2_num)
-        for label, ci in [("Missing", 3), ("Duplicate", 4),
-                           ("Over 70 Characters", 5), ("Multiple", 6)]:
+        for ci, label in enumerate(["Missing", "Duplicate", "Over 70 Characters", "Multiple"], 3):
             ws.write_formula(rr, ci,
                              '=COUNTIFS({},"{}", {},{})'.format(t3_a, label, t3_c, theme_cell),
                              f_t2_num)
 
+    # Table 3
     ws.write(R_TABLE3_LABEL, 0, "Table 3")
 
     t3_headers = [
@@ -310,22 +302,22 @@ def generate(report_dir: str, domain: str) -> bytes:
 
     for ri, row in enumerate(t3_rows):
         rr = R_T3_DATA_START + ri
-        ws.write(rr, 0,  row["error_type"],   f_t3_cell)
-        ws.write(rr, 1,  row["address"],      f_t3_cell)
-        ws.write(rr, 2,  row["theme1"],       f_t3_cell)
-        ws.write(rr, 3,  row["theme2"],       f_t3_cell)
-        ws.write(rr, 4,  row["content_type"], f_t3_cell)
-        ws.write(rr, 5,  row["status_code"],  f_t3_num)
-        ws.write(rr, 6,  row["indexability"], f_t3_cell)
-        ws.write(rr, 7,  row["idx_status"],   f_t3_cell)
-        ws.write(rr, 8,  row["occurrence"],   f_t3_num)
-        ws.write(rr, 9,  row["h1_1"],         f_t3_cell)
-        ws.write(rr, 10, row["h1_1_len"],     f_t3_num)
-        ws.write(rr, 11, row["h1_2"],         f_t3_cell)
-        ws.write(rr, 12, row["h1_2_len"],     f_t3_num)
-        ws.write(rr, 13, row["impressions"],  f_t3_num)
-        ws.write(rr, 14, row["clicks"],       f_t3_num)
-        ws.write(rr, 15, row["sessions"],     f_t3_num)
+        ws.write(rr, 0,  row["error_type"],  f_t3_cell)
+        ws.write(rr, 1,  row["address"],     f_t3_cell)
+        ws.write(rr, 2,  row["theme1"],      f_t3_cell)
+        ws.write(rr, 3,  row["theme2"],      f_t3_cell)
+        ws.write(rr, 4,  row["content_type"],f_t3_cell)
+        ws.write(rr, 5,  row["status_code"], f_t3_num)
+        ws.write(rr, 6,  row["indexability"],f_t3_cell)
+        ws.write(rr, 7,  row["idx_status"],  f_t3_cell)
+        ws.write(rr, 8,  row["occurrence"],  f_t3_num)
+        ws.write(rr, 9,  row["h1_1"],        f_t3_cell)
+        ws.write(rr, 10, row["h1_1_len"],    f_t3_num)
+        ws.write(rr, 11, row["h1_2"],        f_t3_cell)
+        ws.write(rr, 12, row["h1_2_len"],    f_t3_num)
+        ws.write(rr, 13, row["impressions"], f_t3_num)
+        ws.write(rr, 14, row["clicks"],      f_t3_num)
+        ws.write(rr, 15, row["sessions"],    f_t3_num)
 
     wb.close()
     buf.seek(0)
