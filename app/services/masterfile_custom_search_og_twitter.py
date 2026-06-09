@@ -244,11 +244,10 @@ def generate(report_dir: str, domain: str) -> bytes:
     ws.set_row(2, 40)
     ws.set_row(3, 40)
     summary_text = (
-        "Issue Summary:\n"
-        "1. Open Graph tags (og:type, og:title, og:image, og:image:width, og:image:height, og:description, og:site_name) - "
-        "URLs missing OG meta tags, which prevents rich previews when shared on Facebook, LinkedIn, and other platforms.\n"
-        "2. Twitter Card tags (twitter:card, twitter:title, twitter:site, twitter:description, twitter:image) - "
-        "URLs missing Twitter Card meta tags, which prevents rich card previews on Twitter/X when links are shared."
+        "Issue Summary: Open Graph (OG) and Twitter tags are social metadata elements that control how webpages appear "
+        "when shared on social media platforms. Issues include missing, duplicate, incomplete, incorrect, or improperly "
+        "configured OG and Twitter tags that can affect content previews, social sharing appearance, "
+        "engagement, and click-through rates."
     )
     ws.merge_range(1, 0, 3, 20, summary_text, f_issue_summary)
 

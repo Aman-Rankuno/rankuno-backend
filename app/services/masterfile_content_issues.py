@@ -8,25 +8,15 @@ from app.services.rulebook import load_rulebook, classify_url
 PRIORITY_ORDER = {"High": 0, "Medium": 1, "Low": 2, "N/A": 3}
 
 CONTENT_ISSUES = [
-    ("Low Content Pages",         "content_low_content_pages.csv",         "High"),
-    ("Soft 404 Pages",            "content_soft_404_pages.csv",            "High"),
-    ("Spelling Errors",           "content_spelling_errors.csv",           "Medium"),
-    ("Grammar Errors",            "content_grammar_errors.csv",            "Medium"),
-    ("Readability Difficult",     "content_readability_difficult.csv",     "Medium"),
+    ("Low Content Pages",        "content_low_content_pages.csv",        "High"),
+    ("Soft 404 Pages",           "content_soft_404_pages.csv",           "High"),
+    ("Spelling Errors",          "content_spelling_errors.csv",          "Medium"),
+    ("Grammar Errors",           "content_grammar_errors.csv",           "Medium"),
+    ("Readability Difficult",    "content_readability_difficult.csv",    "Medium"),
     ("Readability Very Difficult","content_readability_very_difficult.csv","Medium"),
-    ("Lorem Ipsum Placeholder",   "content_lorem_ipsum_placeholder.csv",   "Medium"),
-    ("Near Duplicates",           "content_near_duplicates.csv",           "Medium"),
-    ("Exact Duplicates",          "content_exact_duplicates.csv",          "High"),
 ]
 
-T1_T2_ISSUES = [
-    "Low Content Pages",
-    "Soft 404 Pages",
-    "Spelling Errors",
-    "Grammar Errors",
-    "Readability Difficult",
-    "Readability Very Difficult",
-]
+T1_T2_ISSUES = [i[0] for i in CONTENT_ISSUES]
 
 
 def safe_num(v):
@@ -79,14 +69,11 @@ def generate(report_dir: str, domain: str) -> bytes:
         return wb.add_format(kw)
 
     f_issue_summary = fmt(bold=True, font_size=10, valign="top", text_wrap=True, border=1)
-    f_section_label = fmt(bold=True, font_size=10)
     f_t1_hdr = fmt(bold=True, font_color=WHITE, bg_color=RED,
                    border=1, align="center", valign="vcenter", text_wrap=True)
     f_t1_lbl = fmt(bold=True, font_color=WHITE, bg_color=RED, border=1, valign="vcenter")
-    f_t1_val = fmt(bold=True, font_color=WHITE, bg_color=RED,
-                   border=1, align="center", valign="vcenter")
-    f_t1_pct = fmt(bold=True, font_color=WHITE, bg_color=RED,
-                   border=1, align="center", valign="vcenter", num_format="0.00%")
+    f_t1_val = fmt(bold=True, border=1, align="center", valign="vcenter")
+    f_t1_pct = fmt(bold=True, border=1, align="center", valign="vcenter", num_format="0.00%")
     f_t2_title = fmt(bold=True, font_color=WHITE, bg_color=RED, border=1, valign="vcenter")
     f_t2_hdr = fmt(bold=True, bg_color=GREY_HDR, border=1, valign="vcenter", text_wrap=True)
     f_t2_cell = fmt(border=1, valign="vcenter")
@@ -140,7 +127,6 @@ def generate(report_dir: str, domain: str) -> bytes:
                     row.get("Organic Sessions") or row.get("Organic sessions")
                 )
 
-    # content_all lookup
     content_lookup = {}
     if not content_all_df.empty and "Address" in content_all_df.columns:
         for _, row in content_all_df.iterrows():
@@ -153,10 +139,9 @@ def generate(report_dir: str, domain: str) -> bytes:
                     "language": _clean(row.get("Language", "")),
                     "flesch": safe_num(row.get("Flesch Reading Ease Score")),
                     "readability": _clean(row.get("Readability", "")),
-                    "canonical": _clean(row.get("Closest Similarity Match", "")),
+                    "canonical": _clean(row.get("Canonical Link Element 1", "")),
                 }
 
-    # internal_all lookup for Status Code
     internal_lookup = {}
     if not internal_df.empty and "Address" in internal_df.columns:
         for _, row in internal_df.iterrows():
@@ -172,15 +157,6 @@ def generate(report_dir: str, domain: str) -> bytes:
     internal_filtered = _filter_indexable_200_html(internal_df)
     total_indexable = len(internal_filtered) if not internal_filtered.empty else 0
 
-    theme_totals = {}
-    if not internal_filtered.empty and "Address" in internal_filtered.columns:
-        for _, row in internal_filtered.iterrows():
-            addr = str(row.get("Address", "")).strip()
-            t1, t2, lang, pri = classify_url(addr, rulebook)
-            theme = t1 if t1 else "-"
-            theme_totals[theme] = theme_totals.get(theme, 0) + 1
-
-    # Build T3 rows
     t3_rows = []
     for issue_label, csv_name, _ in CONTENT_ISSUES:
         df = _load_csv(report_dir, csv_name)
@@ -199,7 +175,7 @@ def generate(report_dir: str, domain: str) -> bytes:
             spelling_errors = cl.get("spelling_errors") or safe_num(row.get("Spelling Errors"))
             language = cl.get("language") or _clean(row.get("Language", ""))
             flesch = cl.get("flesch")
-            readability = cl.get("readability")
+            readability = cl.get("readability") or "-"
             canonical = _clean(row.get("Canonical Link Element 1", "")) if "Canonical Link Element 1" in df.columns else cl.get("canonical", "-")
             gsc = gsc_map.get(addr, {})
             sessions = ga4_map.get(addr)
@@ -212,9 +188,9 @@ def generate(report_dir: str, domain: str) -> bytes:
                 "status_code": status_code,
                 "indexability": indexability,
                 "idx_status": idx_status,
-                "word_count": word_count,
-                "grammar_errors": grammar_errors,
-                "spelling_errors": spelling_errors,
+                "word_count": word_count if word_count else "-",
+                "grammar_errors": grammar_errors if grammar_errors else "-",
+                "spelling_errors": spelling_errors if spelling_errors else "-",
                 "language": language,
                 "flesch": flesch,
                 "readability": readability,
@@ -226,7 +202,6 @@ def generate(report_dir: str, domain: str) -> bytes:
 
     t3_rows.sort(key=lambda r: (r["impressions"] is None, -(r["impressions"] or 0)))
 
-    # Build T2 theme data
     R_T2_DATA_START = 23
     theme_data = {}
     for r in t3_rows:
@@ -234,8 +209,7 @@ def generate(report_dir: str, domain: str) -> bytes:
         if th not in theme_data:
             theme_data[th] = {lbl: 0 for lbl in T1_T2_ISSUES}
             theme_data[th]["priority_basis"] = "N/A"
-        if r["error_type"] in T1_T2_ISSUES:
-            theme_data[th][r["error_type"]] += 1
+        theme_data[th][r["error_type"]] += 1
 
     for _, row in (internal_filtered.iterrows() if not internal_filtered.empty else iter([])):
         addr = str(row.get("Address", "")).strip()
@@ -257,25 +231,18 @@ def generate(report_dir: str, domain: str) -> bytes:
     R_T3_DATA_START = R_T3_HDR + 1
     t3_data_excel_row = R_T3_DATA_START + 1
 
-    # Issue Summary
     ws.set_row(0, 15)
     ws.set_row(1, 55)
     ws.set_row(2, 40)
     ws.set_row(3, 40)
     summary_text = (
-        "Issue Summary:\n"
-        "1. Low Content Pages - URLs with very low word count, potentially thin content that may "
-        "not provide sufficient value to users or search engines.\n"
-        "2. Soft 404 Pages - Pages returning a 200 status but appearing as not found, "
-        "which can confuse both users and crawlers.\n"
-        "3. Spelling Errors - URLs containing spelling mistakes that may reduce content quality "
-        "and user trust.\n"
-        "4. Grammar Errors - URLs with grammatical issues that can negatively impact "
-        "readability and credibility.\n"
-        "5. Readability Difficult / Very Difficult - Pages with complex language that may "
-        "reduce engagement and comprehension.\n"
-        "6. Lorem Ipsum / Near Duplicates / Exact Duplicates - Placeholder, near-duplicate, "
-        "or duplicate content that dilutes crawl budget and search rankings."
+        "Issue Summary: "
+        "1. Low Content Pages - URLs containing very little meaningful or galuable content, which may provide a poor user experience and limit search engine visibility. "
+        "2. Soft 404 Pages - URLs returning a successful status code (200 OK) while displaying content that indicates the page does not exist or contains no meaningful information, potentially confusing search engines. "
+        "3. Spelling Errors - Pages containing spelling mistakes that may negatively impact content quality, user trust, and overall website professionalism. "
+        "4. Grammar Errors - Pages containing grammatical issues that can affect readability, content quality, and user experience. "
+        "5. Readability Difficult - Pages containing content that may be challenging for users to read and understand due to factors such as long sentences, complex vocabulary, or poor content structure. "
+        "6. Readability Very Difficult - Pages containing highly complex content that may significantly reduce readability and user comprehension, potentially impacting user engagement and accessibility."
     )
     ws.merge_range(1, 0, 3, 17, summary_text, f_issue_summary)
 
@@ -286,8 +253,9 @@ def generate(report_dir: str, domain: str) -> bytes:
         ws.write(14, ci, h, f_t1_hdr)
 
     t1_priorities = ["Issue Priority", "High", "High", "Medium", "Medium", "Medium", "Medium"]
-    for ci, v in enumerate(t1_priorities):
-        ws.write(15, ci, v, f_t1_hdr)
+    ws.write(15, 0, t1_priorities[0], f_t1_lbl)
+    for ci, v in enumerate(t1_priorities[1:], 1):
+        ws.write(15, ci, v, f_t1_val)
 
     ws.write(16, 0, "#Affected URLs", f_t1_lbl)
     col_a = "A{}:A1048576".format(t3_data_excel_row)
@@ -343,7 +311,7 @@ def generate(report_dir: str, domain: str) -> bytes:
         ws.write(rr, 4,  row["theme2"],        f_t3_cell)
         ws.write(rr, 5,  row["status_code"],   f_t3_num)
         ws.write(rr, 6,  row["indexability"],  f_t3_cell)
-        ws.write(rr, 7,  row["idx_status"],     f_t3_cell)
+        ws.write(rr, 7,  row["idx_status"],    f_t3_cell)
         ws.write(rr, 8,  row["word_count"],    f_t3_num)
         ws.write(rr, 9,  row["grammar_errors"],f_t3_num)
         ws.write(rr, 10, row["spelling_errors"],f_t3_num)
