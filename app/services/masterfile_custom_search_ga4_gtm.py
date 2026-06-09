@@ -234,11 +234,10 @@ def generate(report_dir: str, domain: str) -> bytes:
     ws.set_row(2, 40)
     ws.set_row(3, 40)
     summary_text = (
-        "Issue Summary:\n"
-        "1. GA4 Available - URLs missing the GA4 tracking tag, which prevents accurate measurement of user behavior, "
-        "conversions, and traffic sources in Google Analytics 4.\n"
-        "2. GTM Available in Head / Body - URLs missing the Google Tag Manager snippet in the <head> or <body>, "
-        "which prevents tag deployment and event tracking across the site."
+        "Issue Summary: GA4 and GTM code identification checks help verify whether Google Analytics 4 (GA4) and "
+        "Google Tag Manager (GTM) tracking codes are properly implemented across website pages. Issues may include "
+        "missing, duplicate, incorrectly placed, inconsistent, or non-functional tracking codes that can impact "
+        "data collection accuracy, analytics reporting, and marketing performance measurement."
     )
     ws.merge_range(1, 0, 3, 11, summary_text, f_issue_summary)
 
