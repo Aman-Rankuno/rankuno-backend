@@ -29,6 +29,19 @@ def safe_num(v):
         return None
 
 
+def _clean(v):
+    if v is None:
+        return "-"
+    import math as _math
+    try:
+        if _math.isnan(float(v)):
+            return "-"
+    except Exception:
+        pass
+    s = str(v).strip()
+    return "-" if (not s or s == "nan") else s
+
+
 def _get_page_type(content_type: str) -> str:
     ct = str(content_type).lower()
     if "html" in ct: return "HTML"
@@ -172,7 +185,7 @@ def build_response_codes_masterfile(crawl_id: str, domain: str, report_path: str
         sc = str(row.get(sc_col, "")) if sc_col else ""
         page_theme1, page_theme2, _, _ = classify_url(url, rulebook)
         gsc = gsc_map.get(url, {})
-        content_type = str(row.get(ct_col, "")) if ct_col else ""
+        content_type = _clean(row.get(ct_col, "")) if ct_col else "-"
 
         redirect_chain = "TRUE" if (error_type == "3xx" and url in chain_urls) else ""
         redirect_loop = "TRUE" if (error_type == "3xx" and url in loop_urls) else ""
@@ -196,12 +209,12 @@ def build_response_codes_masterfile(crawl_id: str, domain: str, report_path: str
             "Page Theme 2": page_theme2 if page_theme2 else "-",
             "Content Type": content_type,
             "Status Code": safe_num(sc) or sc,
-            "Status": str(row.get(st_col, "")) if st_col else "",
-            "Indexability": str(row.get(idx_col, "")) if idx_col else "",
-            "Indexability Status": str(row.get(idx_st_col, "")) if idx_st_col else "",
+            "Status": _clean(row.get(st_col, "")) if st_col else "-",
+            "Indexability": _clean(row.get(idx_col, "")) if idx_col else "-",
+            "Indexability Status": _clean(row.get(idx_st_col, "")) if idx_st_col else "-",
             "Inlinks": safe_num(row.get(inl_col, 0)) if inl_col else None,
-            "Redirect URL": str(row.get(ru_col, "")) if ru_col else "",
-            "Redirect Type": str(row.get(rt_col, "")) if rt_col else "",
+            "Redirect URL": _clean(row.get(ru_col, "")) if ru_col else "-",
+            "Redirect Type": _clean(row.get(rt_col, "")) if rt_col else "-",
             "Redirect chain": redirect_chain,
             "Redirect loop": redirect_loop,
             "Impressions": gsc.get("impressions"),
@@ -341,10 +354,11 @@ def build_response_codes_masterfile(crawl_id: str, domain: str, report_path: str
 
     # ROWS 1-2 (idx 0-1): Issue Summary merged A:F
     summary_text = (
-        'Issue Summary:  Response codes indicate how a server responded to a browser request. '
-        'Issues like 4xx (client errors), 5xx (server errors), 3xx (redirects), and no-response '
-        'URLs can impact crawlability, indexability, and user experience. Identifying and fixing '
-        'these helps ensure search engines and users can access your content.'
+        'Issue Summary '
+        'Response code issues occur when URLs return redirects, errors, server issues, or no response '
+        'instead of loading properly. These issues can affect user experience, crawling, indexing, and '
+        'website performance. This report helps identify affected URLs and prioritize fixes basis '
+        'page importance and performance history.'
     )
     ws.merge_range(0, 0, 1, 5, summary_text, f_summary)
     ws.set_row(0, 56)
