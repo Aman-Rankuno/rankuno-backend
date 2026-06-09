@@ -12,6 +12,14 @@ SITEMAP_ISSUES = [
     ("Orphan URLs",                   "sitemaps_orphan_urls.csv",                   "Medium"),
     ("Non-Indexable URLs in Sitemap", "sitemaps_nonindexable_urls_in_sitemap.csv",  "Medium"),
     ("XML Sitemap Over 50K URLs",     "sitemaps_xml_sitemap_with_over_50k_urls.csv","High"),
+    ("URLs in Multiple Sitemaps",     "sitemaps_urls_in_multiple_sitemaps.csv",     "Medium"),
+]
+
+T1_T2_ISSUES = [
+    "URLs Not in Sitemap",
+    "Orphan URLs",
+    "Non-Indexable URLs in Sitemap",
+    "URLs in Multiple Sitemaps",
 ]
 
 
@@ -66,13 +74,12 @@ def generate(report_dir: str, domain: str) -> bytes:
 
     f_issue_summary = fmt(bold=True, font_size=10, valign="top", text_wrap=True, border=1)
     f_section_label = fmt(bold=True, font_size=10)
-    f_t1_hdr = fmt(bold=True, font_color=WHITE, bg_color=RED,
-                   border=1, align="center", valign="vcenter", text_wrap=True)
+    f_t1_hdr_red = fmt(bold=True, font_color=WHITE, bg_color=RED,
+                       border=1, valign="vcenter", text_wrap=True)
+    f_t1_hdr_white = fmt(bold=True, border=1, align="center", valign="vcenter", text_wrap=True)
     f_t1_lbl = fmt(bold=True, font_color=WHITE, bg_color=RED, border=1, valign="vcenter")
-    f_t1_val = fmt(bold=True, font_color=WHITE, bg_color=RED,
-                   border=1, align="center", valign="vcenter")
-    f_t1_pct = fmt(bold=True, font_color=WHITE, bg_color=RED,
-                   border=1, align="center", valign="vcenter", num_format="0.00%")
+    f_t1_val = fmt(bold=True, border=1, align="center", valign="vcenter")
+    f_t1_pct = fmt(bold=True, border=1, align="center", valign="vcenter", num_format="0.00%")
     f_t2_title = fmt(bold=True, font_color=WHITE, bg_color=RED, border=1, valign="vcenter")
     f_t2_hdr = fmt(bold=True, bg_color=GREY_HDR, border=1, valign="vcenter", text_wrap=True)
     f_t2_cell = fmt(border=1, valign="vcenter")
@@ -139,14 +146,6 @@ def generate(report_dir: str, domain: str) -> bytes:
     internal_filtered = _filter_indexable_200_html(internal_df)
     total_indexable = len(internal_filtered) if not internal_filtered.empty else 0
 
-    theme_totals = {}
-    if not internal_filtered.empty and "Address" in internal_filtered.columns:
-        for _, row in internal_filtered.iterrows():
-            addr = str(row.get("Address", "")).strip()
-            t1, t2, lang, pri = classify_url(addr, rulebook)
-            theme = t1 if t1 else "-"
-            theme_totals[theme] = theme_totals.get(theme, 0) + 1
-
     t3_rows = []
     for issue_label, csv_name, _ in SITEMAP_ISSUES:
         df = _load_csv(report_dir, csv_name)
@@ -185,14 +184,10 @@ def generate(report_dir: str, domain: str) -> bytes:
     for r in t3_rows:
         th = r["theme1"]
         if th not in theme_data:
-            theme_data[th] = {
-                "URLs Not in Sitemap": 0,
-                "Orphan URLs": 0,
-                "Non-Indexable URLs in Sitemap": 0,
-                "XML Sitemap Over 50K URLs": 0,
-                "priority_basis": "N/A",
-            }
-        theme_data[th][r["error_type"]] += 1
+            theme_data[th] = {lbl: 0 for lbl in T1_T2_ISSUES}
+            theme_data[th]["priority_basis"] = "N/A"
+        if r["error_type"] in T1_T2_ISSUES:
+            theme_data[th][r["error_type"]] += 1
 
     for _, row in (internal_filtered.iterrows() if not internal_filtered.empty else iter([])):
         addr = str(row.get("Address", "")).strip()
@@ -222,33 +217,33 @@ def generate(report_dir: str, domain: str) -> bytes:
     ws.set_row(3, 40)
     summary_text = (
         "Issue Summary:\n"
-        "1. URLs Not in Sitemap - Indexable pages that are not included in any XML sitemap, "
-        "reducing their discoverability by search engines.\n"
-        "2. Orphan URLs - Indexable pages with no internal links pointing to them and not in any sitemap, "
-        "making them unreachable by crawlers.\n"
-        "3. Non-Indexable URLs in Sitemap - URLs included in the XML sitemap that are non-indexable, "
-        "wasting crawl budget.\n"
-        "4. XML Sitemap Over 50K URLs - Sitemaps exceeding the 50,000 URL limit recommended by search engines."
+        "1. URLs Not in Sitemap - Indexable URLs discovered during the crawl that are not included in any XML sitemap, "
+        "potentially limiting search engine discovery and crawl prioritisation.\n"
+        "2. Orphan URLs - URLs that are not internally linked within the website structure but were discovered through "
+        "sources such as XML sitemaps, analytics, or external references. Orphan pages may be difficult for search "
+        "engines and users to access.\n"
+        "3. Non-Indexable URLs in Sitemap - XML sitemaps containing non-indexable URLs, such as redirected, "
+        "canonicalised, noindex, blocked, or error pages. Sitemaps should only include indexable URLs intended "
+        "for search engines.\n"
+        "4. URLs in Multiple Sitemaps - URLs appearing across multiple XML sitemaps, which can create redundancy "
+        "and reduce sitemap organisation efficiency for search engines."
     )
     ws.merge_range(1, 0, 3, 11, summary_text, f_issue_summary)
 
     ws.write(8, 0, "Summary Table ", f_section_label)
     ws.write(9, 0, "Table 1")
 
-    t1_headers = ["Sitemap Issue", "URLs Not in Sitemap", "Orphan URLs",
-                  "Non-Indexable URLs in Sitemap", "XML Sitemap Over 50K URLs"]
-    for ci, h in enumerate(t1_headers):
-        ws.write(10, ci, h, f_t1_hdr)
+    ws.write(10, 0, "Sitemap Issue", f_t1_hdr_red)
+    for ci, h in enumerate(T1_T2_ISSUES, 1):
+        ws.write(10, ci, h, f_t1_hdr_white)
 
-    t1_priorities = ["Priority", "Medium", "Medium", "Medium", "High"]
-    for ci, v in enumerate(t1_priorities):
-        ws.write(11, ci, v, f_t1_hdr)
+    ws.write(11, 0, "Priority", f_t1_lbl)
+    for ci, v in enumerate(["Medium", "Medium", "Medium", "Medium"], 1):
+        ws.write(11, ci, v, f_t1_val)
 
     ws.write(12, 0, "# Affected URLs", f_t1_lbl)
     col_a = "A{}:A1048576".format(t3_data_excel_row)
-    issue_labels = ["URLs Not in Sitemap", "Orphan URLs",
-                    "Non-Indexable URLs in Sitemap", "XML Sitemap Over 50K URLs"]
-    for ci, label in enumerate(issue_labels, 1):
+    for ci, label in enumerate(T1_T2_ISSUES, 1):
         ws.write_formula(12, ci, '=COUNTIF({},"{}") '.format(col_a, label), f_t1_val)
 
     ws.set_row(13, 24)
@@ -260,33 +255,28 @@ def generate(report_dir: str, domain: str) -> bytes:
 
     ws.write(15, 0, "Table 2")
     ws.set_row(16, 16)
-    ws.merge_range(16, 0, 16, 5, "Page Theme Wise Sitemap Analysis ", f_t2_title)
+    ws.merge_range(16, 0, 16, 4, "Page Theme Wise Sitemap Analysis ", f_t2_title)
 
-    t2_headers = ["Page Theme", "Total Pages", "URLs Not in Sitemap",
-                  "Orphan URLs", "Non-Indexable URLs in Sitemap", "XML Sitemap Over 50K URLs"]
+    t2_headers = ["Page Theme"] + T1_T2_ISSUES
     for ci, h in enumerate(t2_headers):
         ws.write(17, ci, h, f_t2_hdr)
 
     for ri, (theme, counts) in enumerate(t2_rows_sorted):
         rr = R_T2_DATA_START + ri
-        total_pages = theme_totals.get(theme, 0)
         t3_a = "A{}:A1048576".format(t3_data_excel_row)
         t3_c = "C{}:C1048576".format(t3_data_excel_row)
         theme_cell = '"{}"'.format(theme)
         ws.write(rr, 0, theme, f_t2_cell)
-        ws.write(rr, 1, total_pages, f_t2_num)
-        for ci, label in enumerate(issue_labels, 2):
+        for ci, label in enumerate(T1_T2_ISSUES, 1):
             ws.write_formula(rr, ci,
                              '=COUNTIFS({},"{}", {},{})'.format(t3_a, label, t3_c, theme_cell),
                              f_t2_num)
 
     ws.write(R_T2A_LABEL, 0, "Table 2A")
-    t2a_headers = ["Sitemap URLs", "# of URLs"]
-    for ci, h in enumerate(t2a_headers):
+    for ci, h in enumerate(["Sitemap URLs", "# of URLs"]):
         ws.write(R_T2A_HDR, ci, h, f_t2_hdr)
 
     ws.write(R_TABLE3_LABEL, 0, "Table 3")
-
     t3_headers = [
         "Error Type", "Address", "Page Theme 1", "Page Theme 2",
         "Content Type", "Status Code", "Indexability", "Inlinks Count",
