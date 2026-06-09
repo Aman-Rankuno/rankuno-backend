@@ -238,10 +238,11 @@ def generate(report_dir: str, domain: str) -> bytes:
     ws.set_row(3, 40)
     summary_text = (
         "Issue Summary:\n"
-        "1. Exact Duplicates - URLs with identical content to other pages, which can dilute search rankings "
-        "and confuse search engines about which version to index.\n"
-        "2. Near Duplicates - URLs with highly similar content to other pages, which may compete for the same "
-        "keywords and reduce the ranking strength of each individual page."
+        "1. Near Duplicates - URLs with highly similar content and only minor variations, potentially diluting "
+        "ranking signals and reducing overall content uniqueness.\n"
+        "2. Exact Duplicates - URLs containing identical or substantially identical page content, which can "
+        "create duplication issues and make it difficult for search engines to determine the preferred "
+        "version to index."
     )
     ws.merge_range(1, 0, 3, 14, summary_text, f_issue_summary)
 
