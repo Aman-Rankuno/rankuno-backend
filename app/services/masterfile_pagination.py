@@ -314,9 +314,8 @@ def build_pagination_masterfile(crawl_id: str, domain: str, report_path: str) ->
                 "L", "M", "N", "O", "P", "Q", "R"]:
         ws.set_column(f"{col}:{col}", 13.0)
 
-    # Row 12 (idx 11): Issue Summary merged box
-    ws.set_row(11, 52.5)
-    ws.merge_range(11, 0, 11, 17, SUMMARY_TEXT, f_summary)
+    # Rows 1-11 (idx 0-10): Issue Summary merged box
+    ws.merge_range(0, 0, 10, 17, SUMMARY_TEXT, f_summary)
 
     # Table 1 label
     ws.write(14, 0, "Table 1", f_section)

@@ -23,7 +23,7 @@ def get_db() -> Session:
 
 
 @celery_app.task(bind=True, time_limit=None, soft_time_limit=None)
-def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = None, config_file: str = None, gsc_account: str = None, gsc_property: str = None, ga_account: str = None, ga4_account: str = None, ga4_property: str = None, ga4_stream: str = None):
+def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = None, config_file: str = None, gsc_account: str = None, gsc_property: str = None):
     db = get_db()
     try:
         crawl = db.query(Crawl).filter(Crawl.id == crawl_id).first()
@@ -47,7 +47,7 @@ def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = Non
             "--headless",
             "--output-folder", output_dir,
             "--overwrite",
-            "--export-tabs", "Internal:All,Response Codes:All,Response Codes:Internal Redirection (3xx),Response Codes:Internal Redirect Chain,Response Codes:Internal Redirect Loop,Response Codes:Internal Client Error (4xx),Response Codes:Internal Server Error (5xx),Response Codes:Internal No Response,Response Codes:Internal Blocked by Robots.txt,URL:All,URL:Uppercase,URL:Underscores,URL:Parameters,URL:Multiple Slashes,URL:Repetitive Path,URL:Contains Space,Page Titles:All,Page Titles:Missing,Page Titles:Duplicate,Page Titles:Over X Pixels,Page Titles:Below X Pixels,Page Titles:Same as H1,Page Titles:Multiple,Page Titles:Outside <head>,Meta Description:All,Meta Description:Missing,Meta Description:Duplicate,Meta Description:Over X Pixels,Meta Description:Below X Pixels,Meta Description:Multiple,Meta Description:Outside <head>,H1:All,H1:Missing,H1:Duplicate,H1:Over X Characters,H1:Multiple,Canonicals:All,Canonicals:Canonicalised,Canonicals:Missing,Canonicals:Multiple,Canonicals:Non-Indexable Canonical,Canonicals:Multiple Conflicting,Canonicals:Canonical Is Relative,Canonicals:Unlinked,Canonicals:Outside <head>,Directives:All,Directives:Noindex,Directives:Nofollow,Sitemaps:All,Sitemaps:URLs Not in Sitemap,Sitemaps:Orphan URLs,Sitemaps:Non-Indexable URLs in Sitemap,Sitemaps:XML Sitemap with over 50k URLs,Security:All,Security:HTTP URLs,Security:Mixed Content,Hreflang:All,Hreflang:Non-200 hreflang URLs,Hreflang:Unlinked hreflang URLs,Hreflang:Missing Return Links,Hreflang:Inconsistent Language & Region Return Links,Hreflang:Non-Canonical Return Links,Hreflang:Noindex Return Links,Hreflang:Incorrect Language & Region Codes,Hreflang:Multiple Entries,Hreflang:Missing Self Reference,Hreflang:Not Using Canonical,Hreflang:Missing X-Default,Hreflang:Missing,Hreflang:Outside <head>,Structured Data:All,Structured Data:Missing,Structured Data:Validation Errors,Structured Data:Validation Warnings,Structured Data:Parse Errors,Pagination:All,Pagination:Pagination URL Not in Anchor Tag,Pagination:Unlinked Pagination URLs,Pagination:Non-Indexable,Pagination:Multiple Pagination URLs,Pagination:Pagination Loop,Pagination:Sequence Error,Content:All,Content:Exact Duplicates,Content:Near Duplicates,Content:Low Content Pages,Content:Soft 404 Pages,Content:Spelling Errors,Content:Grammar Errors,Content:Lorem Ipsum Placeholder,Custom Extraction:All,Search Console:All,Analytics:All",
+            "--export-tabs", "Internal:All,Search Console:All,Analytics:All,Inlinks:All",
             "--save-crawl",
         ]
 
@@ -55,19 +55,10 @@ def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = Non
             config_path = os.path.join(settings.CRAWL_CONFIGS_DIR, config_file)
             if os.path.exists(config_path):
                 cmd += ["--config", config_path]
-
         if gsc_account and gsc_property:
             cmd += ["--use-google-search-console", gsc_account, gsc_property]
 
-        if ga_account and ga4_account and ga4_property and ga4_stream:
-            cmd += [
-                "--use-google-analytics-4",
-                ga_account,
-                ga4_account,
-                ga4_property,
-                ga4_stream,
-            ]
-
+        
         if crawl_type in ("full-site", "full-audit", "advanced-audit", "js-crawl", "orphan-pages", "sitemap-generator"):
             crawl_url = domain if domain.startswith("http") else f"https://{domain}"
             cmd += ["--crawl", crawl_url]
