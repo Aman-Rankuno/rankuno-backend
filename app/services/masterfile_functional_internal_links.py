@@ -184,8 +184,8 @@ def build_functional_internal_links_masterfile(crawl_id: str, domain: str, repor
                 "Destination": dst,
                 "Dest Page Theme 1": dst_theme1 or "-",
                 "Dest Page Theme 2": dst_theme2 if dst_theme2 else "-",
-                "Alt Text": str(row.get(alt_col, "")) if alt_col else "",
-                "Anchor": str(row.get(anc_col, "")) if anc_col else "",
+                "Alt Text": "" if str(row.get(alt_col, "")) in ("nan", "None", "") else str(row.get(alt_col, "")),
+                "Anchor": "" if str(row.get(anc_col, "")) in ("nan", "None", "") else str(row.get(anc_col, "")),
                 "Dest Status Code": str(row.get(sc_col, "")) if sc_col else "",
                 "Dest Status": str(row.get(st_col, "")) if st_col else "",
                 "Follow": str(row.get(fol_col, "")) if fol_col else "",
@@ -223,7 +223,7 @@ def build_functional_internal_links_masterfile(crawl_id: str, domain: str, repor
         if theme not in theme_priority:
             theme_priority[theme] = priority
         else:
-            if PRIORITY_ORDER.get(priority, 3) < PRJORITY_ORDER.get(theme_priority[theme], 3):
+            if PRIORITY_ORDER.get(priority, 3) < PRIORITY_ORDER.get(theme_priority[theme], 3):
                 theme_priority[theme] = priority
     sorted_themes = sorted(theme_priority.items(), key=lambda x: PRIORITY_ORDER.get(x[1], 3))
     link_types = ["Hyperlink", "JavaScript", "Iframe"]
@@ -275,15 +275,15 @@ def build_functional_internal_links_masterfile(crawl_id: str, domain: str, repor
     for col in ["C", "D", "E", "F", "G", "H", "I"]:
         ws_dash.set_column(f"{col}:{col}", 18)
     ws_dash.set_column("J:J", 12)
-    ws_dash.write(0, 0, "Functional Internal Links Summary", f_title)
-    ws_dash.write(3, 0, "Total qualifying links analysed", f_bold_lft)
+    ws_dash.merge_range(0, 0, 0, 9, "Functional Internal Links Summary", f_title)
+    ws_dash.merge_range(3, 0, 3, 1, "Total qualifying links analysed", f_bold_lft)
     ws_dash.write(3, 2, total_links, f_num)
     ws_dash.set_row(6, 42)
-    ws_dash.write(6, 0, "Page Theme 1", f_dark_lft)
-    ws_dash.write(6, 1, "Priority Basis Page Theme 1", f_dark_ctr)
+    ws_dash.write(6, 0, "Page Theme 1", f_red_lft)
+    ws_dash.write(6, 1, "Priority Basis Page Theme 1", f_red_ctr)
     for i, bucket in enumerate(INLINK_BUCKETS):
-        ws_dash.write(6, i + 2, bucket, f_dark_ctr)
-    ws_dash.write(6, 9, "TOTAL", f_dark_ctr)
+        ws_dash.write(6, i + 2, bucket, f_red_ctr)
+    ws_dash.write(6, 9, "TOTAL", f_red_ctr)
     theme_row_start = 7
     for row_offset, (theme, priority) in enumerate(sorted_themes):
         r = theme_row_start + row_offset
@@ -386,7 +386,7 @@ def build_functional_internal_links_masterfile(crawl_id: str, domain: str, repor
         ws_fl.write(r, 22, safe_num(row.get("Sessions Dest")), f_rgt)
         ws_fl.write(r, 23, row.get("Inlinks", 0), f_num)
         ws_fl.write(r, 24, row.get("Inlinks Zone", "") or "", f_ctr)
-        ws_fl.write(r, 25, row.get("Is Self Link", "False") or "False", f_ctr)
+        ws_fl.write_formula(r, 25, "=IF(A"+str(r+1)+"=G"+str(r+1)+",True,False)", f_ctr)
     wb.close()
     buf.seek(0)
     return buf.read()
