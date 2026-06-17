@@ -24,6 +24,13 @@ CSV_NAMES = [
     "internal_success_(2xx)_inlinks.csv",
 ]
 
+CHUNK = 200_000
+
+# Excel hard limit is 1,048,576 rows. Headers and tables sit above Table 2,
+# so cap Table 2 at 1,000,000 rows. Rows are sorted by Impressions Dest
+# descending before the cap, so the highest value links are always kept.
+MAX_T2_ROWS = 1_000_000
+
 
 def safe_num(v):
     try:
@@ -56,14 +63,16 @@ def _inlink_zone(count: int) -> str:
         return INLINK_BUCKETS[5]
     return INLINK_BUCKETS[6]
 
-def build_functional_internal_links_masterfile(crawl_id: str, domain: str, report_path: str) -> bytes:
-    template_path = os.path.join(settings.TEMPLATES_DIR, "Functional Internal Links Analysis.xlsx")
-    if not os.path.exists(template_path):
-        raise FileNotFoundError(f"Template not found: {template_path}")
 
+def _clean_text(series: pd.Series) -> pd.Series:
+    s = series.astype(str)
+    return s.where(~s.isin(["nan", "None", "<NA>"]), "")
+
+
+def build_functional_internal_links_masterfile(crawl_id: str, domain: str, report_path: str) -> bytes:
     rulebook = load_rulebook(domain)
 
-    # Find the inlinks CSV
+    # ── Locate the inlinks CSV ────────────────────────────────────────────
     csv_path = None
     for name in CSV_NAMES:
         p = os.path.join(report_path, name)
@@ -73,48 +82,51 @@ def build_functional_internal_links_masterfile(crawl_id: str, domain: str, repor
     if not csv_path:
         raise FileNotFoundError("success_(2xx)_inlinks.csv not found in report folder")
 
-    # Load internal_all for source indexability lookup
-    internal_map = {}
+    # ── internal_all: indexability and status lookups (vectorized) ───────
+    internal_idx, internal_sc, internal_st = {}, {}, {}
     internal_all_path = os.path.join(report_path, "internal_all.csv")
     if os.path.exists(internal_all_path):
-        df_int = pd.read_csv(internal_all_path, encoding="utf-8", low_memory=False,
-                             usecols=lambda c: c.lower() in ("address", "indexability", "status code", "status"))
+        df_int = pd.read_csv(
+            internal_all_path, encoding="utf-8", low_memory=False,
+            usecols=lambda c: c.lower() in ("address", "indexability", "status code", "status"),
+        )
         a_col = _gc(df_int, "Address")
         idx_col = _gc(df_int, "Indexability")
         sc_col = _gc(df_int, "Status Code")
         st_col = _gc(df_int, "Status")
-        for _, r in df_int.iterrows():
-            url = str(r[a_col]) if a_col else ""
-            internal_map[url] = {
-                "indexability": str(r.get(idx_col, "")) if idx_col else "",
-                "status_code": str(r.get(sc_col, "")) if sc_col else "",
-                "status": str(r.get(st_col, "")) if st_col else "",
-            }
+        if a_col:
+            addr = df_int[a_col].astype(str)
+            if idx_col:
+                internal_idx = dict(zip(addr, df_int[idx_col].astype(str)))
+            if sc_col:
+                internal_sc = dict(zip(addr, df_int[sc_col].astype(str)))
+            if st_col:
+                internal_st = dict(zip(addr, df_int[st_col].astype(str)))
 
-    # Load GSC and GA
-    def load_csv_safe(filename, usecols=None):
+    indexable_set = {u for u, v in internal_idx.items() if v.strip().lower() == "indexable"}
+
+    # ── GSC and GA lookups (vectorized) ───────────────────────────────────
+    def load_csv_safe(filename):
         path = os.path.join(report_path, filename)
         if not os.path.exists(path):
             return pd.DataFrame()
         try:
-            if usecols:
-                return pd.read_csv(path, encoding="utf-8", low_memory=False, usecols=usecols)
             return pd.read_csv(path, encoding="utf-8", low_memory=False)
         except Exception:
             return pd.DataFrame()
 
-    gsc_map = {}
+    gsc_imp, gsc_clk = {}, {}
     df_gsc = load_csv_safe("search_console_all.csv")
     if not df_gsc.empty:
         a = _gc(df_gsc, "Address")
         imp = next((c for c in df_gsc.columns if "impression" in c.lower()), None)
         clk = next((c for c in df_gsc.columns if "click" in c.lower()), None)
         if a:
-            for _, r in df_gsc.iterrows():
-                gsc_map[str(r[a])] = {
-                    "impressions": safe_num(r.get(imp, 0)) if imp else None,
-                    "clicks": safe_num(r.get(clk, 0)) if clk else None,
-                }
+            addr = df_gsc[a].astype(str)
+            if imp:
+                gsc_imp = {u: safe_num(v) for u, v in zip(addr, df_gsc[imp])}
+            if clk:
+                gsc_clk = {u: safe_num(v) for u, v in zip(addr, df_gsc[clk])}
 
     ga_map = {}
     df_ga = load_csv_safe("analytics_all.csv")
@@ -122,88 +134,41 @@ def build_functional_internal_links_masterfile(crawl_id: str, domain: str, repor
         a = _gc(df_ga, "Address")
         s = next((c for c in df_ga.columns if "session" in c.lower()), None)
         if a and s:
-            for _, r in df_ga.iterrows():
-                ga_map[str(r[a])] = safe_num(r.get(s, 0))
+            ga_map = {u: safe_num(v) for u, v in zip(df_ga[a].astype(str), df_ga[s])}
 
-    inlink_counts = defaultdict(int)
-    CHUNK = 50000
+    # ── Single pass over the inlinks CSV ──────────────────────────────────
+    # Filter each chunk down to Link Position = Content with an indexable
+    # source, then concatenate. This replaces the previous two full reads.
+    parts = []
+    col_names = {}
     for chunk in pd.read_csv(csv_path, encoding="utf-8", low_memory=False, chunksize=CHUNK):
-        lp_col = _gc(chunk, "Link Position")
-        src_col = _gc(chunk, "Source")
-        dst_col = _gc(chunk, "Destination")
-        if not (lp_col and src_col and dst_col):
+        if not col_names:
+            col_names = {
+                "lp": _gc(chunk, "Link Position"),
+                "src": _gc(chunk, "Source"),
+                "dst": _gc(chunk, "Destination"),
+                "type": _gc(chunk, "Type"),
+                "alt": _gc(chunk, "Alt Text"),
+                "anc": _gc(chunk, "Anchor"),
+                "sc": _gc(chunk, "Status Code"),
+                "st": _gc(chunk, "Status"),
+                "fol": _gc(chunk, "Follow"),
+                "lo": _gc(chunk, "Link Origin"),
+            }
+        if not (col_names["lp"] and col_names["src"] and col_names["dst"]):
             break
-        mask = chunk[lp_col].str.lower() == "content"
+        mask = chunk[col_names["lp"]].astype(str).str.lower() == "content"
         chunk = chunk[mask]
-        for _, row in chunk.iterrows():
-            src = str(row[src_col])
-            dst = str(row[dst_col])
-            if src == dst:
-                continue
-            src_info = internal_map.get(src, {})
-            if src_info.get("indexability", "").lower() != "indexable":
-                continue
-            inlink_counts[dst] += 1
+        if chunk.empty:
+            continue
+        chunk = chunk[chunk[col_names["src"]].astype(str).isin(indexable_set)]
+        if not chunk.empty:
+            parts.append(chunk)
 
-    all_rows = []
-    for chunk in pd.read_csv(csv_path, encoding="utf-8", low_memory=False, chunksize=CHUNK):
-        lp_col = _gc(chunk, "Link Position")
-        src_col = _gc(chunk, "Source")
-        dst_col = _gc(chunk, "Destination")
-        type_col = _gc(chunk, "Type")
-        alt_col = _gc(chunk, "Alt Text")
-        anc_col = _gc(chunk, "Anchor")
-        sc_col = _gc(chunk, "Status Code")
-        st_col = _gc(chunk, "Status")
-        fol_col = _gc(chunk, "Follow")
-        lo_col = _gc(chunk, "Link Origin")
-        if not (lp_col and src_col and dst_col):
-            break
-        mask = chunk[lp_col].str.lower() == "content"
-        chunk = chunk[mask]
-        for _, row in chunk.iterrows():
-            src = str(row.get(src_col, ""))
-            dst = str(row.get(dst_col, ""))
-            is_self = src == dst
-            src_info = internal_map.get(src, {})
-            src_idx = src_info.get("indexability", "")
-            if src_idx.lower() != "indexable":
-                continue
-            src_theme1, src_theme2, _, _ = classify_url(src, rulebook)
-            dst_theme1, dst_theme2, _, _ = classify_url(dst, rulebook)
-            gsc_src = gsc_map.get(src, {})
-            gsc_dst = gsc_map.get(dst, {})
-            inlink_count = inlink_counts.get(dst, 0)
-            all_rows.append({
-                "Source": src,
-                "Source Page Theme 1": src_theme1 or "-",
-                "Source Page Theme 2": src_theme2 if src_theme2 else "-",
-                "Source Indexability": src_idx,
-                "Source Status Code": src_info.get("status_code", ""),
-                "Source Status": src_info.get("status", ""),
-                "Destination": dst,
-                "Dest Page Theme 1": dst_theme1 or "-",
-                "Dest Page Theme 2": dst_theme2 if dst_theme2 else "-",
-                "Alt Text": "" if str(row.get(alt_col, "")) in ("nan", "None", "") else str(row.get(alt_col, "")),
-                "Anchor": "" if str(row.get(anc_col, "")) in ("nan", "None", "") else str(row.get(anc_col, "")),
-                "Dest Status Code": str(row.get(sc_col, "")) if sc_col else "",
-                "Dest Status": str(row.get(st_col, "")) if st_col else "",
-                "Follow": str(row.get(fol_col, "")) if fol_col else "",
-                "Type": str(row.get(type_col, "")) if type_col else "",
-                "Link Position": str(row.get(lp_col, "")) if lp_col else "",
-                "Link Origin": str(row.get(lo_col, "")) if lo_col else "",
-                "Impressions Source": gsc_src.get("impressions"),
-                "Clicks Source": gsc_src.get("clicks"),
-                "Sessions Source": ga_map.get(src),
-                "Impressions Dest": gsc_dst.get("impressions"),
-                "Clicks Dest": gsc_dst.get("clicks"),
-                "Sessions Dest": ga_map.get(dst),
-                "Inlinks": inlink_count,
-                "Inlinks Zone": _inlink_zone(inlink_count),
-                "Is Self Link": "True" if is_self else "False",
-            })
+    df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    del parts
 
-    df_t2 = pd.DataFrame(all_rows) if all_rows else pd.DataFrame(columns=[
+    t2_columns = [
         "Source", "Source Page Theme 1", "Source Page Theme 2",
         "Source Indexability", "Source Status Code", "Source Status",
         "Destination", "Dest Page Theme 1", "Dest Page Theme 2",
@@ -212,48 +177,116 @@ def build_functional_internal_links_masterfile(crawl_id: str, domain: str, repor
         "Impressions Source", "Clicks Source", "Sessions Source",
         "Impressions Dest", "Clicks Dest", "Sessions Dest",
         "Inlinks", "Inlinks Zone", "Is Self Link",
-    ])
-    if not df_t2.empty:
+    ]
+
+    if not df.empty:
+        src = df[col_names["src"]].astype(str)
+        dst = df[col_names["dst"]].astype(str)
+
+        # Inlink counts: non-self links only, indexable sources already enforced
+        inlink_counts = dst[src.values != dst.values].value_counts().to_dict()
+
+        # Classify each unique URL exactly once
+        cls_cache = {}
+        for u in set(src).union(set(dst)):
+            cls_cache[u] = classify_url(u, rulebook)
+
+        def _t1(u):
+            return cls_cache[u][0] or "-"
+
+        def _t2c(u):
+            return cls_cache[u][1] or "-"
+
+        def _col(key, default=""):
+            c = col_names.get(key)
+            return _clean_text(df[c]) if c else pd.Series(default, index=df.index)
+
+        df_t2 = pd.DataFrame({
+            "Source": src.values,
+            "Source Page Theme 1": src.map(_t1).values,
+            "Source Page Theme 2": src.map(_t2c).values,
+            "Source Indexability": src.map(lambda u: internal_idx.get(u, "")).values,
+            "Source Status Code": src.map(lambda u: internal_sc.get(u, "")).values,
+            "Source Status": src.map(lambda u: internal_st.get(u, "")).values,
+            "Destination": dst.values,
+            "Dest Page Theme 1": dst.map(_t1).values,
+            "Dest Page Theme 2": dst.map(_t2c).values,
+            "Alt Text": _col("alt").values,
+            "Anchor": _col("anc").values,
+            "Dest Status Code": (df[col_names["sc"]].astype(str) if col_names["sc"] else pd.Series("", index=df.index)).values,
+            "Dest Status": (df[col_names["st"]].astype(str) if col_names["st"] else pd.Series("", index=df.index)).values,
+            "Follow": (df[col_names["fol"]].astype(str) if col_names["fol"] else pd.Series("", index=df.index)).values,
+            "Type": (df[col_names["type"]].astype(str) if col_names["type"] else pd.Series("", index=df.index)).values,
+            "Link Position": df[col_names["lp"]].astype(str).values,
+            "Link Origin": (df[col_names["lo"]].astype(str) if col_names["lo"] else pd.Series("", index=df.index)).values,
+            "Impressions Source": src.map(lambda u: gsc_imp.get(u)).values,
+            "Clicks Source": src.map(lambda u: gsc_clk.get(u)).values,
+            "Sessions Source": src.map(lambda u: ga_map.get(u)).values,
+            "Impressions Dest": dst.map(lambda u: gsc_imp.get(u)).values,
+            "Clicks Dest": dst.map(lambda u: gsc_clk.get(u)).values,
+            "Sessions Dest": dst.map(lambda u: ga_map.get(u)).values,
+            "Inlinks": dst.map(lambda u: inlink_counts.get(u, 0)).values,
+            "Is Self Link": (src.values == dst.values),
+        })
+        df_t2["Inlinks Zone"] = df_t2["Inlinks"].map(_inlink_zone)
         df_t2 = df_t2.sort_values("Impressions Dest", ascending=False, na_position="last").reset_index(drop=True)
+        if len(df_t2) > MAX_T2_ROWS:
+            df_t2 = df_t2.head(MAX_T2_ROWS)
+        del df, src, dst
+    else:
+        df_t2 = pd.DataFrame(columns=t2_columns)
+        cls_cache = {}
+
     total_links = len(df_t2)
+
+    # ── Theme priority (one classify lookup per unique source) ───────────
     theme_priority = {}
-    for _, row in df_t2.iterrows():
-        theme = row["Source Page Theme 1"] if row["Source Page Theme 1"] != "-" else "Others"
-        _, _, _, priority = classify_url(row["Source"], rulebook)
-        if theme not in theme_priority:
-            theme_priority[theme] = priority
-        else:
-            if PRIORITY_ORDER.get(priority, 3) < PRIORITY_ORDER.get(theme_priority[theme], 3):
+    if not df_t2.empty:
+        for u, t in zip(df_t2["Source"], df_t2["Source Page Theme 1"]):
+            theme = t if t != "-" else "Others"
+            priority = cls_cache[u][3]
+            current = theme_priority.get(theme)
+            if current is None or PRIORITY_ORDER.get(priority, 3) < PRIORITY_ORDER.get(current, 3):
                 theme_priority[theme] = priority
     sorted_themes = sorted(theme_priority.items(), key=lambda x: PRIORITY_ORDER.get(x[1], 3))
-    link_types = ["Hyperlink", "JavaScript", "Iframe"]
-    t1_data = {}
-    for theme, _ in sorted_themes:
-        t1_data[theme] = {"Hyperlink": 0, "JavaScript": 0, "Iframe": 0}
+
+    # ── Table 1: theme x link type counts (crosstab) ──────────────────────
+    t1_data = {theme: {"Hyperlink": 0, "JavaScript": 0, "Iframe": 0} for theme, _ in sorted_themes}
     if not df_t2.empty:
-        for _, row in df_t2.iterrows():
-            theme = row["Source Page Theme 1"] if row["Source Page Theme 1"] != "-" else "Others"
-            lt = str(row.get("Type", "")).strip()
-            if lt in t1_data.get(theme, {}):
-                t1_data[theme][lt] += 1
-    dest_info = {}
-    if not df_t2.empty:
-        for _, row in df_t2.iterrows():
-            dst = row["Destination"]
-            if dst not in dest_info:
-                dest_info[dst] = {"theme": row["Dest Page Theme 1"] if row["Dest Page Theme 1"] != "-" else "Others", "inlinks": row["Inlinks"]}
+        theme_series = df_t2["Source Page Theme 1"].where(df_t2["Source Page Theme 1"] != "-", "Others")
+        type_series = df_t2["Type"].astype(str).str.strip()
+        ct = pd.crosstab(theme_series, type_series)
+        for theme in t1_data:
+            if theme in ct.index:
+                for lt in ("Hyperlink", "JavaScript", "Iframe"):
+                    if lt in ct.columns:
+                        t1_data[theme][lt] = int(ct.at[theme, lt])
+
+    # ── Dashboard: destination theme x inlink zone ────────────────────────
     dash_data = defaultdict(lambda: defaultdict(int))
-    for dst, info in dest_info.items():
-        dash_data[info["theme"]][_inlink_zone(info["inlinks"])] += 1
+    if not df_t2.empty:
+        dd = df_t2.drop_duplicates(subset=["Destination"], keep="first")
+        for theme, zone in zip(dd["Dest Page Theme 1"], dd["Inlinks Zone"]):
+            theme = theme if theme != "-" else "Others"
+            dash_data[theme][zone] += 1
+
+    # ── Workbook ──────────────────────────────────────────────────────────
     buf = io.BytesIO()
-    wb = xlsxwriter.Workbook(buf, {"in_memory": True, "nan_inf_to_errors": True})
+    wb = xlsxwriter.Workbook(buf, {
+        "in_memory": False,
+        "nan_inf_to_errors": True,
+        "strings_to_urls": False,
+    })
+
     RED = "#FF0000"
     WHITE = "#FFFFFF"
     BLACK = "#000000"
     DARK = "#404040"
     FONT = "Rockwell"
+
     def f(**kw):
         return wb.add_format(kw)
+
     f_title = f(bold=True, font_name=FONT, font_size=12, font_color=BLACK)
     f_red_ctr = f(bold=True, font_name=FONT, font_size=8, font_color=WHITE, bg_color=RED, border=1, align="center", valign="vcenter", text_wrap=True)
     f_red_lft = f(bold=True, font_name=FONT, font_size=8, font_color=WHITE, bg_color=RED, border=1, align="left", valign="vcenter", text_wrap=True)
@@ -263,27 +296,31 @@ def build_functional_internal_links_masterfile(crawl_id: str, domain: str, repor
     f_ctr = f(font_name=FONT, font_size=8, font_color=BLACK, bg_color=WHITE, border=1, align="center", valign="vcenter")
     f_lft = f(font_name=FONT, font_size=8, font_color=BLACK, bg_color=WHITE, border=1, align="left", valign="vcenter")
     f_rgt = f(font_name=FONT, font_size=8, font_color=BLACK, bg_color=WHITE, border=1, align="right", valign="vcenter")
-    f_bold_ctr = f(bold=True, font_name=FONT, font_size=8, font_color=BLACK, bg_color=WHITE, border=1, align="center", valign="vcenter")
     f_bold_lft = f(bold=True, font_name=FONT, font_size=8, font_color=BLACK, bg_color=WHITE, border=1, align="left", valign="vcenter")
     f_num = f(font_name=FONT, font_size=8, font_color=BLACK, bg_color=WHITE, border=1, align="center", valign="vcenter", num_format="0")
     f_pct = f(font_name=FONT, font_size=8, font_color=BLACK, bg_color=WHITE, border=1, align="center", valign="vcenter", num_format="0.0%")
     f_summary_box = f(font_name=FONT, font_size=8, font_color=BLACK, text_wrap=True, valign="top", border=1)
     f_merged_red = f(bold=True, font_name=FONT, font_size=8, font_color=WHITE, bg_color=RED, border=1, align="center", valign="vcenter")
+
+    # ── Dashboard sheet ───────────────────────────────────────────────────
     ws_dash = wb.add_worksheet("Dashboard")
     ws_dash.set_column("A:A", 22)
     ws_dash.set_column("B:B", 22)
     for col in ["C", "D", "E", "F", "G", "H", "I"]:
         ws_dash.set_column(f"{col}:{col}", 18)
     ws_dash.set_column("J:J", 12)
+
     ws_dash.merge_range(0, 0, 0, 9, "Functional Internal Links Summary", f_title)
     ws_dash.merge_range(3, 0, 3, 1, "Total qualifying links analysed", f_bold_lft)
     ws_dash.write(3, 2, total_links, f_num)
+
     ws_dash.set_row(6, 42)
     ws_dash.write(6, 0, "Page Theme 1", f_red_lft)
     ws_dash.write(6, 1, "Priority Basis Page Theme 1", f_red_ctr)
     for i, bucket in enumerate(INLINK_BUCKETS):
         ws_dash.write(6, i + 2, bucket, f_red_ctr)
     ws_dash.write(6, 9, "TOTAL", f_red_ctr)
+
     theme_row_start = 7
     for row_offset, (theme, priority) in enumerate(sorted_themes):
         r = theme_row_start + row_offset
@@ -295,20 +332,41 @@ def build_functional_internal_links_masterfile(crawl_id: str, domain: str, repor
             ws_dash.write(r, i + 2, val, f_num)
             row_total += val
         ws_dash.write(r, 9, row_total, f_num)
+
     total_row = theme_row_start + len(sorted_themes)
     ws_dash.write(total_row, 0, "Total Pages", f_bold_lft)
     ws_dash.write(total_row, 1, "-", f_ctr)
+    col_totals = []
     for i, bucket in enumerate(INLINK_BUCKETS):
         col_letter = chr(ord('C') + i)
-        ws_dash.write_formula(total_row, i + 2, f"=SUM({col_letter}{theme_row_start + 1}:{col_letter}{total_row})", f_num)
-    ws_dash.write_formula(total_row, 9, f"=SUM(J{theme_row_start + 1}:J{total_row})", f_num)
+        col_sum = sum(dash_data[t].get(bucket, 0) for t, _ in sorted_themes)
+        col_totals.append(col_sum)
+        ws_dash.write_formula(
+            total_row, i + 2,
+            f"=SUM({col_letter}{theme_row_start + 1}:{col_letter}{total_row})",
+            f_num, col_sum,
+        )
+    grand_total = sum(col_totals)
+    ws_dash.write_formula(
+        total_row, 9,
+        f"=SUM(J{theme_row_start + 1}:J{total_row})",
+        f_num, grand_total,
+    )
+
     pct_row = total_row + 1
     ws_dash.write(pct_row, 0, "% of Master List", f_bold_lft)
     ws_dash.write(pct_row, 1, "-", f_ctr)
     for i in range(len(INLINK_BUCKETS)):
         col_letter = chr(ord('C') + i)
-        ws_dash.write_formula(pct_row, i + 2, f"=IF(J{total_row + 1}>0,{col_letter}{total_row + 1}/J{total_row + 1},\"\")", f_pct)
+        cached_pct = (col_totals[i] / grand_total) if grand_total else ""
+        ws_dash.write_formula(
+            pct_row, i + 2,
+            f"=IF(J{total_row + 1}>0,{col_letter}{total_row + 1}/J{total_row + 1},\"\")",
+            f_pct, cached_pct,
+        )
     ws_dash.write(pct_row, 9, "100.0%", f_pct)
+
+    # ── Functional links sheet ────────────────────────────────────────────
     ws_fl = wb.add_worksheet("Functional links")
     ws_fl.set_column("A:A", 50)
     ws_fl.set_column("B:B", 18)
@@ -332,8 +390,11 @@ def build_functional_internal_links_masterfile(crawl_id: str, domain: str, repor
     ws_fl.set_column("X:X", 10)
     ws_fl.set_column("Y:Y", 30)
     ws_fl.set_column("Z:Z", 25)
+    ws_fl.set_default_row(14.5)
+
     ws_fl.merge_range(0, 0, 3, 25, "Issue Summary: Functional Internal Links Analysis evaluates internal links pointing to 200 OK destination URLs. Only links with Link Position = Content are included. Source URLs must be indexable. Self-links (source = destination) are excluded from inlink counts.", f_summary_box)
     ws_fl.set_row(0, 50)
+
     ws_fl.write(4, 0, "Table 1", f_section)
     ws_fl.merge_range(5, 0, 5, 4, "Page Theme Wise URL Analysis ", f_merged_red)
     ws_fl.set_row(6, 42)
@@ -342,6 +403,7 @@ def build_functional_internal_links_masterfile(crawl_id: str, domain: str, repor
     ws_fl.write(6, 2, "# Links\nLink Type - Hyperlink", f_dark_ctr)
     ws_fl.write(6, 3, "# Links\nLink Type - Javascript", f_dark_ctr)
     ws_fl.write(6, 4, "# Links\nLink Type - Iframe", f_dark_ctr)
+
     T1_DATA_START = 7
     for row_offset, (theme, priority) in enumerate(sorted_themes):
         r = T1_DATA_START + row_offset
@@ -350,43 +412,80 @@ def build_functional_internal_links_masterfile(crawl_id: str, domain: str, repor
         ws_fl.write(r, 2, t1_data.get(theme, {}).get("Hyperlink", 0), f_num)
         ws_fl.write(r, 3, t1_data.get(theme, {}).get("JavaScript", 0), f_num)
         ws_fl.write(r, 4, t1_data.get(theme, {}).get("Iframe", 0), f_num)
+
     T2_LABEL_ROW = T1_DATA_START + len(sorted_themes) + 1
     ws_fl.write(T2_LABEL_ROW, 0, "Table 2", f_section)
     T2_HDR_ROW = T2_LABEL_ROW + 1
     T2_DATA_START = T2_HDR_ROW + 1
     ws_fl.set_row(T2_HDR_ROW, 31.5)
+
     t2_headers = ["Source", "Page Theme 1", "Page Theme 2", "Source - Indexability", "Source - Status Code", "Source - Status", "Destination", "Page Theme 1", "Page Theme 2", "Alt Text", "Anchor", "Destination - Status Code", "Destination - Status", "Follow", "Type", "Link Position", "Link Origin", "Impressions - Source", "Clicks - Source", "Organic Sessions - Source", "Impressions - Destination", "Clicks - Destination", "Organic Sessions - Destination", "# Inlinks", "# Inlinks - Zones", "Is source URL = Destination URL?"]
     for i, h in enumerate(t2_headers):
         ws_fl.write(T2_HDR_ROW, i, h, f_red_lft if i == 0 else f_red_ctr)
-    for row_offset, (_, row) in enumerate(df_t2.iterrows()):
-        r = T2_DATA_START + row_offset
-        ws_fl.set_row(r, 14.5)
-        ws_fl.write(r, 0, row.get("Source", "") or "", f_lft)
-        ws_fl.write(r, 1, row.get("Source Page Theme 1", "") or "-", f_ctr)
-        ws_fl.write(r, 2, row.get("Source Page Theme 2", "") or "-", f_ctr)
-        ws_fl.write(r, 3, row.get("Source Indexability", "") or "", f_ctr)
-        ws_fl.write(r, 4, row.get("Source Status Code", "") or "", f_ctr)
-        ws_fl.write(r, 5, row.get("Source Status", "") or "", f_ctr)
-        ws_fl.write(r, 6, row.get("Destination", "") or "", f_lft)
-        ws_fl.write(r, 7, row.get("Dest Page Theme 1", "") or "-", f_ctr)
-        ws_fl.write(r, 8, row.get("Dest Page Theme 2", "") or "-", f_ctr)
-        ws_fl.write(r, 9, row.get("Alt Text", "") or "", f_lft)
-        ws_fl.write(r, 10, row.get("Anchor", "") or "", f_lft)
-        ws_fl.write(r, 11, row.get("Dest Status Code", "") or "", f_ctr)
-        ws_fl.write(r, 12, row.get("Dest Status", "") or "", f_ctr)
-        ws_fl.write(r, 13, row.get("Follow", "") or "", f_ctr)
-        ws_fl.write(r, 14, row.get("Type", "") or "", f_ctr)
-        ws_fl.write(r, 15, row.get("Link Position", "") or "", f_ctr)
-        ws_fl.write(r, 16, row.get("Link Origin", "") or "", f_ctr)
-        ws_fl.write(r, 17, safe_num(row.get("Impressions Source")), f_rgt)
-        ws_fl.write(r, 18, safe_num(row.get("Clicks Source")), f_rgt)
-        ws_fl.write(r, 19, safe_num(row.get("Sessions Source")), f_rgt)
-        ws_fl.write(r, 20, safe_num(row.get("Impressions Dest")), f_rgt)
-        ws_fl.write(r, 21, safe_num(row.get("Clicks Dest")), f_rgt)
-        ws_fl.write(r, 22, safe_num(row.get("Sessions Dest")), f_rgt)
-        ws_fl.write(r, 23, row.get("Inlinks", 0), f_num)
-        ws_fl.write(r, 24, row.get("Inlinks Zone", "") or "", f_ctr)
-        ws_fl.write_formula(r, 25, "=IF(A"+str(r+1)+"=G"+str(r+1)+",True,False)", f_ctr)
+
+    # Pull columns out as Python lists once, then write row by row.
+    # This avoids the per-row pandas overhead of iterrows().
+    if not df_t2.empty:
+        c_src = df_t2["Source"].tolist()
+        c_spt1 = df_t2["Source Page Theme 1"].tolist()
+        c_spt2 = df_t2["Source Page Theme 2"].tolist()
+        c_sidx = df_t2["Source Indexability"].tolist()
+        c_ssc = df_t2["Source Status Code"].tolist()
+        c_sst = df_t2["Source Status"].tolist()
+        c_dst = df_t2["Destination"].tolist()
+        c_dpt1 = df_t2["Dest Page Theme 1"].tolist()
+        c_dpt2 = df_t2["Dest Page Theme 2"].tolist()
+        c_alt = df_t2["Alt Text"].tolist()
+        c_anc = df_t2["Anchor"].tolist()
+        c_dsc = df_t2["Dest Status Code"].tolist()
+        c_dst_st = df_t2["Dest Status"].tolist()
+        c_fol = df_t2["Follow"].tolist()
+        c_typ = df_t2["Type"].tolist()
+        c_lp = df_t2["Link Position"].tolist()
+        c_lo = df_t2["Link Origin"].tolist()
+        c_imp_s = df_t2["Impressions Source"].tolist()
+        c_clk_s = df_t2["Clicks Source"].tolist()
+        c_ses_s = df_t2["Sessions Source"].tolist()
+        c_imp_d = df_t2["Impressions Dest"].tolist()
+        c_clk_d = df_t2["Clicks Dest"].tolist()
+        c_ses_d = df_t2["Sessions Dest"].tolist()
+        c_inl = df_t2["Inlinks"].tolist()
+        c_zone = df_t2["Inlinks Zone"].tolist()
+        c_self = df_t2["Is Self Link"].tolist()
+
+        for idx in range(total_links):
+            r = T2_DATA_START + idx
+            ws_fl.write(r, 0, c_src[idx] or "", f_lft)
+            ws_fl.write(r, 1, c_spt1[idx] or "-", f_ctr)
+            ws_fl.write(r, 2, c_spt2[idx] or "-", f_ctr)
+            ws_fl.write(r, 3, c_sidx[idx] or "", f_ctr)
+            ws_fl.write(r, 4, c_ssc[idx] or "", f_ctr)
+            ws_fl.write(r, 5, c_sst[idx] or "", f_ctr)
+            ws_fl.write(r, 6, c_dst[idx] or "", f_lft)
+            ws_fl.write(r, 7, c_dpt1[idx] or "-", f_ctr)
+            ws_fl.write(r, 8, c_dpt2[idx] or "-", f_ctr)
+            ws_fl.write(r, 9, c_alt[idx] or "", f_lft)
+            ws_fl.write(r, 10, c_anc[idx] or "", f_lft)
+            ws_fl.write(r, 11, c_dsc[idx] or "", f_ctr)
+            ws_fl.write(r, 12, c_dst_st[idx] or "", f_ctr)
+            ws_fl.write(r, 13, c_fol[idx] or "", f_ctr)
+            ws_fl.write(r, 14, c_typ[idx] or "", f_ctr)
+            ws_fl.write(r, 15, c_lp[idx] or "", f_ctr)
+            ws_fl.write(r, 16, c_lo[idx] or "", f_ctr)
+            ws_fl.write(r, 17, safe_num(c_imp_s[idx]), f_rgt)
+            ws_fl.write(r, 18, safe_num(c_clk_s[idx]), f_rgt)
+            ws_fl.write(r, 19, safe_num(c_ses_s[idx]), f_rgt)
+            ws_fl.write(r, 20, safe_num(c_imp_d[idx]), f_rgt)
+            ws_fl.write(r, 21, safe_num(c_clk_d[idx]), f_rgt)
+            ws_fl.write(r, 22, safe_num(c_ses_d[idx]), f_rgt)
+            ws_fl.write(r, 23, int(c_inl[idx]) if c_inl[idx] else 0, f_num)
+            ws_fl.write(r, 24, c_zone[idx] or "", f_ctr)
+            ws_fl.write_formula(
+                r, 25,
+                f"=IF(A{r + 1}=G{r + 1},True,False)",
+                f_ctr, bool(c_self[idx]),
+            )
+
     wb.close()
     buf.seek(0)
     return buf.read()

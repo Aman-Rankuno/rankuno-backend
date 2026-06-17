@@ -22,7 +22,7 @@ from app.services.masterfile_custom_search_ga4_gtm import generate as generate_c
 from app.services.masterfile_custom_search_og_twitter import generate as generate_custom_search_og_twitter_masterfile
 from app.services.masterfile_pagination import build_pagination_masterfile
 from app.services.masterfile_functional_internal_links import build_functional_internal_links_masterfile
-from app.services.masterfile_functional_internal_links import build_functional_internal_links_masterfile
+from app.services.masterfile_non_functional_internal_links import build_non_functional_internal_links_masterfile
 
 router = APIRouter()
 
@@ -353,19 +353,19 @@ def download_masterfile_pagination(crawl_id: str, db: Session = Depends(get_db))
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 
-@router.get("/{crawl_id}/download/masterfile/internal-links-functional")
-def download_masterfile_functional_internal_links(crawl_id: str, db: Session = Depends(get_db)):
+@router.get("/{crawl_id}/download/masterfile/internal-links-non-functional")
+def download_masterfile_non_functional_internal_links(crawl_id: str, db: Session = Depends(get_db)):
     crawl = db.query(Crawl).filter(Crawl.id == crawl_id).first()
     if not crawl:
         raise HTTPException(status_code=404, detail="Crawl not found")
     if not crawl.report_path or not os.path.exists(crawl.report_path):
         raise HTTPException(status_code=404, detail="Crawl output folder not found")
     try:
-        excel_bytes = build_functional_internal_links_masterfile(crawl.id, crawl.domain, crawl.report_path)
+        excel_bytes = build_non_functional_internal_links_masterfile(crawl.id, crawl.domain, crawl.report_path)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate masterfile: {str(e)}")
     domain_safe = crawl.domain.replace("https://", "").replace("http://", "").replace("/", "_").rstrip("_")
-    filename = f"{domain_safe}_functional_internal_links.xlsx"
+    filename = f"{domain_safe}_non_functional_internal_links.xlsx"
     return StreamingResponse(
         io.BytesIO(excel_bytes),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -373,19 +373,19 @@ def download_masterfile_functional_internal_links(crawl_id: str, db: Session = D
     )
 
 
-@router.get("/{crawl_id}/download/masterfile/internal-links-functional")
-def download_masterfile_functional_internal_links(crawl_id: str, db: Session = Depends(get_db)):
+@router.get("/{crawl_id}/download/masterfile/internal-links-non-functional")
+def download_masterfile_non_functional_internal_links(crawl_id: str, db: Session = Depends(get_db)):
     crawl = db.query(Crawl).filter(Crawl.id == crawl_id).first()
     if not crawl:
         raise HTTPException(status_code=404, detail="Crawl not found")
     if not crawl.report_path or not os.path.exists(crawl.report_path):
         raise HTTPException(status_code=404, detail="Crawl output folder not found")
     try:
-        excel_bytes = build_functional_internal_links_masterfile(crawl.id, crawl.domain, crawl.report_path)
+        excel_bytes = build_non_functional_internal_links_masterfile(crawl.id, crawl.domain, crawl.report_path)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate masterfile: {str(e)}")
     domain_safe = crawl.domain.replace("https://", "").replace("http://", "").replace("/", "_").rstrip("_")
-    filename = f"{domain_safe}_functional_internal_links.xlsx"
+    filename = f"{domain_safe}_non_functional_internal_links.xlsx"
     return StreamingResponse(
         io.BytesIO(excel_bytes),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
