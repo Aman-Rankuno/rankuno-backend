@@ -391,3 +391,53 @@ def download_masterfile_non_functional_internal_links(crawl_id: str, db: Session
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+@router.get("/{crawl_id}/download/masterfile/all")
+def download_all_masterfiles(crawl_id: str, db: Session = Depends(get_db)):
+    crawl = db.query(Crawl).filter(Crawl.id == crawl_id).first()
+    if not crawl:
+        raise HTTPException(status_code=404, detail="Crawl not found")
+    if not crawl.report_path or not os.path.exists(crawl.report_path):
+        raise HTTPException(status_code=404, detail="Crawl output folder not found")
+
+    domain_safe = crawl.domain.replace("https://", "").replace("http://", "").replace("/", "_").rstrip("_")
+
+    masterfiles = [
+        ("response_codes_internal", build_response_codes_masterfile, [crawl.id, crawl.domain, crawl.report_path]),
+        ("url_issues", build_url_issues_masterfile, [crawl.id, crawl.domain, crawl.report_path]),
+        ("page_titles", build_page_titles_masterfile, [crawl.id, crawl.domain, crawl.report_path]),
+        ("meta_description", build_meta_description_masterfile, [crawl.id, crawl.domain, crawl.report_path]),
+        ("h1", generate_h1_masterfile, [crawl.report_path, crawl.domain]),
+        ("directives", generate_directives_masterfile, [crawl.report_path, crawl.domain]),
+        ("sitemaps", generate_sitemaps_masterfile, [crawl.report_path, crawl.domain]),
+        ("content_issues", generate_content_issues_masterfile, [crawl.report_path, crawl.domain]),
+        ("duplicate_content", generate_duplicate_content_masterfile, [crawl.report_path, crawl.domain]),
+        ("custom_search_ga4_gtm", generate_custom_search_ga4_gtm_masterfile, [crawl.report_path, crawl.domain]),
+        ("custom_search_og_twitter", generate_custom_search_og_twitter_masterfile, [crawl.report_path, crawl.domain]),
+        ("pagination", build_pagination_masterfile, [crawl.id, crawl.domain, crawl.report_path]),
+        ("functional_internal_links", build_functional_internal_links_masterfile, [crawl.id, crawl.domain, crawl.report_path]),
+        ("non_functional_internal_links", build_non_functional_internal_links_masterfile, [crawl.id, crawl.domain, crawl.report_path]),
+    ]
+
+    zip_buffer = io.BytesIO()
+    errors = []
+
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, fn, args in masterfiles:
+            try:
+                excel_bytes = fn(*args)
+                zf.writestr(f"{domain_safe}_{name}.xlsx", excel_bytes)
+            except Exception as e:
+                errors.append(f"{name}: {str(e)}")
+
+    if errors:
+        with zipfile.ZipFile(zip_buffer, "a") as zf:
+            zf.writestr("errors.txt", "\n".join(errors))
+
+    zip_buffer.seek(0)
+    filename = f"{domain_safe}_all_masterfiles.zip"
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
