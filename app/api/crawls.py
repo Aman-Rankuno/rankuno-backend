@@ -23,6 +23,7 @@ from app.services.masterfile_custom_search_og_twitter import generate as generat
 from app.services.masterfile_pagination import build_pagination_masterfile
 from app.services.masterfile_functional_internal_links import build_functional_internal_links_masterfile
 from app.services.masterfile_non_functional_internal_links import build_non_functional_internal_links_masterfile
+from app.services.masterfile_canonicals import build_canonicals_masterfile
 from app.services.masterfile_lorem_ipsum import build_lorem_ipsum_masterfile
 
 router = APIRouter()
@@ -495,3 +496,13 @@ def download_masterfile_lorem_ipsum(crawl_id: str, db: Session = Depends(get_db)
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+@router.get("/{crawl_id}/download/masterfile/canonicals")
+def download_masterfile_canonicals(crawl_id: str, db: Session = Depends(get_db)):
+    crawl = db.query(Crawl).filter(Crawl.id == crawl_id).first()
+    if not crawl: raise HTTPException(status_code=404, detail="Crawl not found")
+    if not crawl.report_path or not os.path.exists(crawl.report_path): raise HTTPException(status_code=404, detail="Crawl output folder not found")
+    try:
+        excel_bytes = build_canonicals_masterfile(crawl.id, crawl.domain, crawl.report_path)
+    except Exception as e: raise HTTPException(status_code=500, detail=f"Failed: {str(e)}")
+    domain_safe = crawl.domain.replace("https://", "").replace("http://", "").replace("/", "_").rstrip("_")
+    return StreamingResponse(io.BytesIO(excel_bytes),media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",headers={"Content-Disposition": f"attachment; filename={domain_safe}_canonicals.xlsx"})
