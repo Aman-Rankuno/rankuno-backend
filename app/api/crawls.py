@@ -418,6 +418,7 @@ def download_all_masterfiles(crawl_id: str, db: Session = Depends(get_db)):
         ("pagination", build_pagination_masterfile, [crawl.id, crawl.domain, crawl.report_path]),
         ("functional_internal_links", build_functional_internal_links_masterfile, [crawl.id, crawl.domain, crawl.report_path]),
         ("non_functional_internal_links", build_non_functional_internal_links_masterfile, [crawl.id, crawl.domain, crawl.report_path]),
+        ("lorem_ipsum", build_lorem_ipsum_masterfile, [crawl.id, crawl.domain, crawl.report_path]),
     ]
 
     zip_buffer = io.BytesIO()
