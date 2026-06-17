@@ -441,3 +441,37 @@ def download_all_masterfiles(crawl_id: str, db: Session = Depends(get_db)):
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+@router.get("/{crawl_id}/download/masterfile/raw-zip")
+def download_raw_zip(crawl_id: str, db: Session = Depends(get_db)):
+    crawl = db.query(Crawl).filter(Crawl.id == crawl_id).first()
+    if not crawl:
+        raise HTTPException(status_code=404, detail="Crawl not found")
+    if not crawl.report_path or not os.path.exists(crawl.report_path):
+        raise HTTPException(status_code=404, detail="Crawl output folder not found")
+    domain_safe = crawl.domain.replace("https://", "").replace("http://", "").replace("/", "_").rstrip("_")
+    zip_path = os.path.join(crawl.report_path, "raw_files.zip")
+    if os.path.exists(zip_path):
+        # Serve pre-built zip directly - instant download
+        def iterfile():
+            with open(zip_path, "rb") as f:
+                while chunk := f.read(1024 * 1024):
+                    yield chunk
+        return StreamingResponse(
+            iterfile(),
+            media_type="application/zip",
+            headers={"Content-Disposition": f"attachment; filename={domain_safe}_raw_files.zip"},
+        )
+    # Fallback: build on the fly if pre-built zip does not exist
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for filename in os.listdir(crawl.report_path):
+            filepath = os.path.join(crawl.report_path, filename)
+            if os.path.isfile(filepath) and filename != "raw_files.zip":
+                zf.write(filepath, arcname=filename)
+    zip_buffer.seek(0)
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={domain_safe}_raw_files.zip"},
+    )

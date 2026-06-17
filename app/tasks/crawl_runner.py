@@ -1,5 +1,6 @@
 import subprocess
 import os
+import zipfile
 import time
 from datetime import datetime, timezone
 from celery import Celery
@@ -93,6 +94,18 @@ def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = Non
             crawl.report_path = output_dir
             crawl.pages_crawled = count_crawled_pages(output_dir)
             crawl.completed_at = datetime.now(timezone.utc)
+            # Pre-build raw files zip for instant download
+            try:
+                zip_path = os.path.join(output_dir, "raw_files.zip")
+                with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for fname in os.listdir(output_dir):
+                        if fname == "raw_files.zip":
+                            continue
+                        fpath = os.path.join(output_dir, fname)
+                        if os.path.isfile(fpath):
+                            zf.write(fpath, arcname=fname)
+            except Exception as zip_err:
+                pass  # Non-fatal: zip failed but crawl succeeded
         else:
             crawl.status = "failed"
             try:
