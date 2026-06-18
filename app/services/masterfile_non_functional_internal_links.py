@@ -253,7 +253,7 @@ def build_non_functional_internal_links_masterfile(crawl_id: str, domain: str, r
     f_bold_ctr = f(bold=True, font_name=FONT, font_size=8, font_color=BLACK,
                    bg_color=WHITE, border=1, align="center", valign="vcenter")
     f_num = f(font_name=FONT, font_size=8, font_color=BLACK,
-              bg_color=WHITE, border=1, align="center", valign="vcenter", num_format="0")
+              bg_color=WHITE, border=1, align="center", valign="vcenter", num_format="#,##0")
     f_pct = f(font_name=FONT, font_size=8, font_color=BLACK,
               bg_color=WHITE, border=1, align="center", valign="vcenter", num_format="0.00%")
     f_summary = f(font_name=FONT, font_size=8, font_color=BLACK,
@@ -433,7 +433,7 @@ def build_non_functional_internal_links_masterfile(crawl_id: str, domain: str, r
         ws.set_column("Y:Z", 30)
 
         # Issue Summary box rows 0-3
-        ws.merge_range(0, 0, 3, 25, cfg["summary"], f_summary)
+        ws.merge_range(0, 0, 3, 4, cfg["summary"], f_summary)
         ws.set_row(0, 50)
 
         # Row 4: blank
@@ -491,12 +491,12 @@ def build_non_functional_internal_links_masterfile(crawl_id: str, domain: str, r
         ws.write(11, 0, "Table 2", f_lbl)
 
         # Row 12: Table 2 title
-        ws.merge_range(12, 0, 12, len(labels) * 2, "Page Theme Wise URL Analysis ", f_red_lft)
+        ws.merge_range(12, 0, 12, len(labels) * 2, "Page Theme Wise Internal Links Analysis", f_red_lft)
 
         # Row 13: Table 2 headers
         ws.set_row(13, 42)
-        ws.write(13, 0, "Page Theme 1", f_col_lft)
-        ws.write(13, 1, "Priority Basis Page Theme 1", f_col_hdr)
+        ws.write(13, 0, "Page Theme 1", f_red_lft)
+        ws.write(13, 1, "Priority Basis Page Theme 1", f_red_hdr)
         col = 2
         for lbl in labels:
             ws.write(13, col, f"{lbl} - Unique Pages", f_col_hdr)
@@ -535,7 +535,6 @@ def build_non_functional_internal_links_masterfile(crawl_id: str, domain: str, r
             "Impressions - Source", "Clicks - Source", "Organic Sessions - Source",
             "Impressions - Destination", "Clicks - Destination", "Organic Sessions - Destination",
             "Number of Inlinks to the Destination Page",
-            "Is source URL = Destination URL?",
         ]
         if has_redirect:
             t3_headers += [
@@ -577,13 +576,12 @@ def build_non_functional_internal_links_masterfile(crawl_id: str, domain: str, r
             ws.write(r, 23, safe_num(row_data["sess_dst"]), f_rgt)
             inlink_count = inlink_count_map.get(row_data["destination"], 0)
             ws.write(r, 24, inlink_count, f_num)
-            ws.write_formula(r, 25, f'=IF(B{r+1}=H{r+1},"True","False")', f_cell)
             if has_redirect:
-                ws.write(r, 26, row_data.get("is_chain", "No"), f_cell)
-                ws.write(r, 27, row_data.get("is_loop", "No"), f_cell)
-                ws.write(r, 28, row_data.get("num_redirects", ""), f_cell)
-                ws.write(r, 29, row_data.get("temp_redirect", ""), f_cell)
-                ws.write(r, 30, row_data.get("final_redirect_url", ""), f_cell_lft)
+                ws.write(r, 25, row_data.get("is_chain", "No"), f_cell)
+                ws.write(r, 26, row_data.get("is_loop", "No"), f_cell)
+                ws.write(r, 27, row_data.get("num_redirects", ""), f_cell)
+                ws.write(r, 28, row_data.get("temp_redirect", ""), f_cell)
+                ws.write(r, 29, row_data.get("final_redirect_url", ""), f_cell_lft)
 
     # BUILD DASHBOARD SHEET
     ws_dash = wb.add_worksheet("Dashboard")
