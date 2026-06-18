@@ -251,16 +251,24 @@ def build_functional_internal_links_masterfile(crawl_id: str, domain: str, repor
     sorted_themes = sorted(theme_priority.items(), key=lambda x: PRIORITY_ORDER.get(x[1], 3))
 
     # ── Table 1: theme x link type counts (crosstab) ──────────────────────
-    t1_data = {theme: {"Hyperlink": 0, "JavaScript": 0, "Iframe": 0} for theme, _ in sorted_themes}
+    link_types_ordered = []
+    t1_data = {}
     if not df_t2.empty:
         theme_series = df_t2["Source Page Theme 1"].where(df_t2["Source Page Theme 1"] != "-", "Others")
         type_series = df_t2["Type"].astype(str).str.strip()
         ct = pd.crosstab(theme_series, type_series)
-        for theme in t1_data:
-            if theme in ct.index:
-                for lt in ("Hyperlink", "JavaScript", "Iframe"):
-                    if lt in ct.columns:
-                        t1_data[theme][lt] = int(ct.at[theme, lt])
+        link_types_ordered = sorted(list(ct.columns), key=lambda x: (0 if x == "Hyperlink" else 1, x))
+        for theme, _ in sorted_themes:
+            t1_data[theme] = {lt: int(ct.at[theme, lt]) if theme in ct.index and lt in ct.columns else 0 for lt in link_types_ordered}
+    else:
+        link_types_ordered = ["Hyperlink", "JavaScript", "Iframe"]
+        t1_data = {theme: {lt: 0 for lt in link_types_ordered} for theme, _ in sorted_themes}
+
+    # Re-sort for Table 1: priority then Hyperlink descending
+    sorted_themes = sorted(
+        sorted_themes,
+        key=lambda x: (PRIORITY_ORDER.get(x[1], 3), -t1_data.get(x[0], {}).get('Hyperlink', 0))
+    )
 
     # ── Dashboard: destination theme x inlink zone ────────────────────────
     dash_data = defaultdict(lambda: defaultdict(int))
@@ -269,6 +277,12 @@ def build_functional_internal_links_masterfile(crawl_id: str, domain: str, repor
         for theme, zone in zip(dd["Dest Page Theme 1"], dd["Inlinks Zone"]):
             theme = theme if theme != "-" else "Others"
             dash_data[theme][zone] += 1
+
+    # Sort dashboard: priority then total descending
+    dash_sorted_themes = sorted(
+        sorted_themes,
+        key=lambda x: (PRIORITY_ORDER.get(x[1], 3), -sum(dash_data.get(x[0], {}).values()))
+    )
 
     # ── Workbook ──────────────────────────────────────────────────────────
     buf = io.BytesIO()
@@ -297,7 +311,7 @@ def build_functional_internal_links_masterfile(crawl_id: str, domain: str, repor
     f_lft = f(font_name=FONT, font_size=8, font_color=BLACK, bg_color=WHITE, border=1, align="left", valign="vcenter")
     f_rgt = f(font_name=FONT, font_size=8, font_color=BLACK, bg_color=WHITE, border=1, align="right", valign="vcenter")
     f_bold_lft = f(bold=True, font_name=FONT, font_size=8, font_color=BLACK, bg_color=WHITE, border=1, align="left", valign="vcenter")
-    f_num = f(font_name=FONT, font_size=8, font_color=BLACK, bg_color=WHITE, border=1, align="center", valign="vcenter", num_format="0")
+    f_num = f(font_name=FONT, font_size=8, font_color=BLACK, bg_color=WHITE, border=1, align="center", valign="vcenter", num_format="#,##0")
     f_pct = f(font_name=FONT, font_size=8, font_color=BLACK, bg_color=WHITE, border=1, align="center", valign="vcenter", num_format="0.0%")
     f_summary_box = f(font_name=FONT, font_size=8, font_color=BLACK, text_wrap=True, valign="top", border=1)
     f_merged_red = f(bold=True, font_name=FONT, font_size=8, font_color=WHITE, bg_color=RED, border=1, align="center", valign="vcenter")
@@ -311,6 +325,8 @@ def build_functional_internal_links_masterfile(crawl_id: str, domain: str, repor
     ws_dash.set_column("J:J", 12)
 
     ws_dash.merge_range(0, 0, 0, 9, "Functional Internal Links Summary", f_title)
+    ws_dash.merge_range(1, 0, 1, 9, "Internal Link Audit & Opportunity Analysis\nEvaluate internal link distribution across key pages to uncover opportunities for improving crawlability, authority flow, and organic visibility.", f_summary_box)
+    ws_dash.set_row(1, 36)
     ws_dash.merge_range(3, 0, 3, 1, "Total qualifying links analysed", f_bold_lft)
     ws_dash.write(3, 2, total_links, f_num)
 
@@ -322,24 +338,25 @@ def build_functional_internal_links_masterfile(crawl_id: str, domain: str, repor
     ws_dash.write(6, 9, "TOTAL", f_red_ctr)
 
     theme_row_start = 7
-    for row_offset, (theme, priority) in enumerate(sorted_themes):
+    for row_offset, (theme, priority) in enumerate(dash_sorted_themes):
         r = theme_row_start + row_offset
         ws_dash.write(r, 0, theme, f_bold_lft)
         ws_dash.write(r, 1, priority, f_ctr)
-        row_total = 0
         for i, bucket in enumerate(INLINK_BUCKETS):
-            val = dash_data[theme].get(bucket, 0)
+            val = dash_data.get(theme, {}).get(bucket, 0)
             ws_dash.write(r, i + 2, val, f_num)
-            row_total += val
-        ws_dash.write(r, 9, row_total, f_num)
+        col_start = chr(ord("C"))
+        col_end = chr(ord("C") + len(INLINK_BUCKETS) - 1)
+        row_total = sum(dash_data.get(theme, {}).values())
+        ws_dash.write_formula(r, 9, f"=SUM({col_start}{r+1}:{col_end}{r+1})", f_num, row_total)
 
-    total_row = theme_row_start + len(sorted_themes)
+    total_row = theme_row_start + len(dash_sorted_themes)
     ws_dash.write(total_row, 0, "Total Pages", f_bold_lft)
     ws_dash.write(total_row, 1, "-", f_ctr)
     col_totals = []
     for i, bucket in enumerate(INLINK_BUCKETS):
         col_letter = chr(ord('C') + i)
-        col_sum = sum(dash_data[t].get(bucket, 0) for t, _ in sorted_themes)
+        col_sum = sum(dash_data[t].get(bucket, 0) for t, _ in dash_sorted_themes)
         col_totals.append(col_sum)
         ws_dash.write_formula(
             total_row, i + 2,
@@ -354,7 +371,7 @@ def build_functional_internal_links_masterfile(crawl_id: str, domain: str, repor
     )
 
     pct_row = total_row + 1
-    ws_dash.write(pct_row, 0, "% of Master List", f_bold_lft)
+    ws_dash.write(pct_row, 0, "% of Total URLs analysed", f_bold_lft)
     ws_dash.write(pct_row, 1, "-", f_ctr)
     for i in range(len(INLINK_BUCKETS)):
         col_letter = chr(ord('C') + i)
@@ -392,26 +409,24 @@ def build_functional_internal_links_masterfile(crawl_id: str, domain: str, repor
     ws_fl.set_column("Z:Z", 25)
     ws_fl.set_default_row(14.5)
 
-    ws_fl.merge_range(0, 0, 3, 25, "Issue Summary: Functional Internal Links Analysis evaluates internal links pointing to 200 OK destination URLs. Only links with Link Position = Content are included. Source URLs must be indexable. Self-links (source = destination) are excluded from inlink counts.", f_summary_box)
+    ws_fl.merge_range(0, 0, 3, 4, "Internal Link Audit & Opportunity Analysis\nEvaluate internal link distribution across key pages to uncover opportunities for improving crawlability, authority flow, and organic visibility.", f_summary_box)
     ws_fl.set_row(0, 50)
 
     ws_fl.write(4, 0, "Table 1", f_section)
-    ws_fl.merge_range(5, 0, 5, 4, "Page Theme Wise URL Analysis ", f_merged_red)
+    ws_fl.merge_range(5, 0, 5, 4, "Page Theme Wise Internal Links Analysis", f_merged_red)
     ws_fl.set_row(6, 42)
-    ws_fl.write(6, 0, "Page Theme 1", f_dark_lft)
-    ws_fl.write(6, 1, "Priority Basis Page Theme 1", f_dark_ctr)
-    ws_fl.write(6, 2, "# Links\nLink Type - Hyperlink", f_dark_ctr)
-    ws_fl.write(6, 3, "# Links\nLink Type - Javascript", f_dark_ctr)
-    ws_fl.write(6, 4, "# Links\nLink Type - Iframe", f_dark_ctr)
+    ws_fl.write(6, 0, "Page Theme 1", f_red_lft)
+    ws_fl.write(6, 1, "Priority Basis Page Theme 1", f_red_ctr)
+    for lt_i, lt in enumerate(link_types_ordered):
+        ws_fl.write(6, lt_i + 2, f"# Links\nLink Type - {lt}", f_dark_ctr)
 
     T1_DATA_START = 7
     for row_offset, (theme, priority) in enumerate(sorted_themes):
         r = T1_DATA_START + row_offset
         ws_fl.write(r, 0, theme, f_bold_lft)
         ws_fl.write(r, 1, priority, f_ctr)
-        ws_fl.write(r, 2, t1_data.get(theme, {}).get("Hyperlink", 0), f_num)
-        ws_fl.write(r, 3, t1_data.get(theme, {}).get("JavaScript", 0), f_num)
-        ws_fl.write(r, 4, t1_data.get(theme, {}).get("Iframe", 0), f_num)
+        for lt_i, lt in enumerate(link_types_ordered):
+            ws_fl.write(r, lt_i + 2, t1_data.get(theme, {}).get(lt, 0), f_num)
 
     T2_LABEL_ROW = T1_DATA_START + len(sorted_themes) + 1
     ws_fl.write(T2_LABEL_ROW, 0, "Table 2", f_section)
@@ -419,7 +434,7 @@ def build_functional_internal_links_masterfile(crawl_id: str, domain: str, repor
     T2_DATA_START = T2_HDR_ROW + 1
     ws_fl.set_row(T2_HDR_ROW, 31.5)
 
-    t2_headers = ["Source", "Page Theme 1", "Page Theme 2", "Source - Indexability", "Source - Status Code", "Source - Status", "Destination", "Page Theme 1", "Page Theme 2", "Alt Text", "Anchor", "Destination - Status Code", "Destination - Status", "Follow", "Type", "Link Position", "Link Origin", "Impressions - Source", "Clicks - Source", "Organic Sessions - Source", "Impressions - Destination", "Clicks - Destination", "Organic Sessions - Destination", "# Inlinks", "# Inlinks - Zones", "Is source URL = Destination URL?"]
+    t2_headers = ["Source", "Page Theme 1", "Page Theme 2", "Source - Indexability", "Source - Status Code", "Source - Status", "Destination", "Page Theme 1", "Page Theme 2", "Alt Text", "Anchor", "Destination - Status Code", "Destination - Status", "Follow", "Type", "Link Position", "Link Origin", "Impressions - Source", "Clicks - Source", "Organic Sessions - Source", "Impressions - Destination", "Clicks - Destination", "Organic Sessions - Destination", "# Inlinks to the Destination Page", "# Inlinks - Zones"]
     for i, h in enumerate(t2_headers):
         ws_fl.write(T2_HDR_ROW, i, h, f_red_lft if i == 0 else f_red_ctr)
 
@@ -479,12 +494,8 @@ def build_functional_internal_links_masterfile(crawl_id: str, domain: str, repor
             ws_fl.write(r, 21, safe_num(c_clk_d[idx]), f_rgt)
             ws_fl.write(r, 22, safe_num(c_ses_d[idx]), f_rgt)
             ws_fl.write(r, 23, int(c_inl[idx]) if c_inl[idx] else 0, f_num)
-            ws_fl.write(r, 24, c_zone[idx] or "", f_ctr)
-            ws_fl.write_formula(
-                r, 25,
-                f"=IF(A{r + 1}=G{r + 1},True,False)",
-                f_ctr, bool(c_self[idx]),
-            )
+            zone_val = c_zone[idx] if not c_self[idx] else ""
+            ws_fl.write(r, 24, zone_val or "", f_ctr)
 
     wb.close()
     buf.seek(0)
