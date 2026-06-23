@@ -26,6 +26,7 @@ from app.services.masterfile_non_functional_internal_links import build_non_func
 from app.services.masterfile_canonicals import build_canonicals_masterfile
 from app.services.masterfile_overview_report import build_overview_report_masterfile
 from app.services.masterfile_lorem_ipsum import build_lorem_ipsum_masterfile
+from app.services.masterfile_hreflang import build_hreflang_masterfile
 
 router = APIRouter()
 
@@ -357,8 +358,6 @@ def download_masterfile_pagination(crawl_id: str, db: Session = Depends(get_db))
     )
 
 
-
-
 @router.get("/{crawl_id}/download/masterfile/internal-links-functional")
 def download_masterfile_functional_internal_links(crawl_id: str, db: Session = Depends(get_db)):
     crawl = db.query(Crawl).filter(Crawl.id == crawl_id).first()
@@ -368,20 +367,26 @@ def download_masterfile_functional_internal_links(crawl_id: str, db: Session = D
         excel_bytes = build_functional_internal_links_masterfile(crawl.id, crawl.domain, crawl.report_path)
     except Exception as e: raise HTTPException(status_code=500, detail=f"Failed: {str(e)}")
     domain_safe = crawl.domain.replace("https://", "").replace("http://", "").replace("/", "_").rstrip("_")
-    return StreamingResponse(io.BytesIO(excel_bytes), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename={domain_safe}_functional_internal_links.xlsx"})
-
+    return StreamingResponse(io.BytesIO(excel_bytes),media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",headers={"Content-Disposition": f"attachment; filename={domain_safe}_functional_internal_links.xlsx"})
 
 @router.get("/{crawl_id}/download/masterfile/internal-links-non-functional")
 def download_masterfile_non_functional_internal_links(crawl_id: str, db: Session = Depends(get_db)):
     crawl = db.query(Crawl).filter(Crawl.id == crawl_id).first()
-    if not crawl: raise HTTPException(status_code=404, detail="Crawl not found")
-    if not crawl.report_path or not os.path.exists(crawl.report_path): raise HTTPException(status_code=404, detail="Crawl output folder not found")
+    if not crawl:
+        raise HTTPException(status_code=404, detail="Crawl not found")
+    if not crawl.report_path or not os.path.exists(crawl.report_path):
+        raise HTTPException(status_code=404, detail="Crawl output folder not found")
     try:
         excel_bytes = build_non_functional_internal_links_masterfile(crawl.id, crawl.domain, crawl.report_path)
-    except Exception as e: raise HTTPException(status_code=500, detail=f"Failed: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate masterfile: {str(e)}")
     domain_safe = crawl.domain.replace("https://", "").replace("http://", "").replace("/", "_").rstrip("_")
-    return StreamingResponse(io.BytesIO(excel_bytes), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename={domain_safe}_non_functional_internal_links.xlsx"})
-
+    filename = f"{domain_safe}_non_functional_internal_links.xlsx"
+    return StreamingResponse(
+        io.BytesIO(excel_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 @router.get("/{crawl_id}/download/masterfile/all")
 def download_all_masterfiles(crawl_id: str, db: Session = Depends(get_db)):
@@ -444,7 +449,6 @@ def download_raw_zip(crawl_id: str, db: Session = Depends(get_db)):
     domain_safe = crawl.domain.replace("https://", "").replace("http://", "").replace("/", "_").rstrip("_")
     zip_path = os.path.join(crawl.report_path, "raw_files.zip")
     if os.path.exists(zip_path):
-        # Serve pre-built zip directly - instant download
         def iterfile():
             with open(zip_path, "rb") as f:
                 while chunk := f.read(1024 * 1024):
@@ -454,7 +458,6 @@ def download_raw_zip(crawl_id: str, db: Session = Depends(get_db)):
             media_type="application/zip",
             headers={"Content-Disposition": f"attachment; filename={domain_safe}_raw_files.zip"},
         )
-    # Fallback: build on the fly if pre-built zip does not exist
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         for filename in os.listdir(crawl.report_path):
@@ -506,3 +509,14 @@ def download_masterfile_canonicals(crawl_id: str, db: Session = Depends(get_db))
     except Exception as e: raise HTTPException(status_code=500, detail=f"Failed: {str(e)}")
     domain_safe = crawl.domain.replace("https://", "").replace("http://", "").replace("/", "_").rstrip("_")
     return StreamingResponse(io.BytesIO(excel_bytes),media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",headers={"Content-Disposition": f"attachment; filename={domain_safe}_canonicals.xlsx"})
+
+@router.get("/{crawl_id}/download/masterfile/hreflang")
+def download_masterfile_hreflang(crawl_id: str, db: Session = Depends(get_db)):
+    crawl = db.query(Crawl).filter(Crawl.id == crawl_id).first()
+    if not crawl: raise HTTPException(status_code=404, detail="Crawl not found")
+    if not crawl.report_path or not os.path.exists(crawl.report_path): raise HTTPException(status_code=404, detail="Crawl output folder not found")
+    try:
+        excel_bytes = build_hreflang_masterfile(crawl.id, crawl.domain, crawl.report_path)
+    except Exception as e: raise HTTPException(status_code=500, detail=f"Failed: {str(e)}")
+    domain_safe = crawl.domain.replace("https://", "").replace("http://", "").replace("/", "_").rstrip("_")
+    return StreamingResponse(io.BytesIO(excel_bytes),media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",headers={"Content-Disposition": f"attachment; filename={domain_safe}_hreflang.xlsx"})
