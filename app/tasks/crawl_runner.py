@@ -23,8 +23,22 @@ def get_db() -> Session:
     return SessionLocal()
 
 
+BULK_EXPORTS = ",".join([
+    "Response Codes:Internal:Internal Success (2xx) Inlinks",
+    "Response Codes:Internal:Internal Client Error (4xx) Inlinks",
+    "Response Codes:Internal:Internal Server Error (5xx) Inlinks",
+    "Response Codes:Internal:Internal Redirection (3xx) Inlinks",
+    "Response Codes:Internal:Internal No Response Inlinks",
+    "Response Codes:Internal:Internal Blocked by Robots.txt Inlinks",
+    "Response Codes:Internal:Internal Blocked Resource Inlinks",
+    "Canonicals:Canonicalised Inlinks",
+    "Canonicals:Non-Indexable Canonical Inlinks",
+    "Security:HTTP URLs Inlinks",
+])
+
+
 @celery_app.task(bind=True, time_limit=None, soft_time_limit=None)
-def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = None, config_file: str = None, gsc_account: str = None, gsc_property: str = None):
+def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = None, config_file: str = None, gsc_account: str = None, gsc_property: str = None, ga_account: str = None, ga4_account: str = None, ga4_property: str = None, ga4_stream: str = None, include_patterns: str = None, exclude_patterns: str = None):
     db = get_db()
     try:
         crawl = db.query(Crawl).filter(Crawl.id == crawl_id).first()
@@ -48,7 +62,9 @@ def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = Non
             "--headless",
             "--output-folder", output_dir,
             "--overwrite",
-            "--export-tabs", "Internal:All,Search Console:All,Analytics:All,Inlinks:All",
+            "--export-tabs", "Internal:All,Search Console:All,Analytics:All",
+            "--bulk-export", BULK_EXPORTS,
+            "--save-report", "Crawl Overview",
             "--save-crawl",
         ]
 
@@ -59,7 +75,7 @@ def run_crawl(self, crawl_id: str, domain: str, crawl_type: str, urls: str = Non
         if gsc_account and gsc_property:
             cmd += ["--use-google-search-console", gsc_account, gsc_property]
 
-        
+
         if crawl_type in ("full-site", "full-audit", "advanced-audit", "js-crawl", "orphan-pages", "sitemap-generator"):
             crawl_url = domain if domain.startswith("http") else f"https://{domain}"
             cmd += ["--crawl", crawl_url]
