@@ -6,4 +6,5 @@ sqlalchemy
 psycopg2-binary
 alembic
 python-dotenv
-pydantic-settings
+pydantic-settingsanthropic
+openai
