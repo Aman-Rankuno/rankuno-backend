@@ -17,6 +17,8 @@ app.add_middleware(
 
 app.include_router(crawls.router, prefix="/api/crawls", tags=["crawls"])
 app.include_router(chat.router, prefix="/api", tags=["chat"])
+from app.api import configs
+app.include_router(configs.router, prefix="/api/configs", tags=["configs"])
 
 
 @app.get("/")

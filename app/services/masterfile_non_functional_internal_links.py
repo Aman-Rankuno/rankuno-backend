@@ -1,5 +1,6 @@
 import os
 import io
+import glob
 import math
 import pandas as pd
 import xlsxwriter
@@ -9,6 +10,10 @@ from app.services.rulebook import load_rulebook, classify_url
 
 PRIORITY_ORDER = {"High": 0, "Medium": 1, "Low": 2, "N/A": 3}
 
+# Excel hard limit is 1,048,576 rows per sheet; cap Table 3 detail rows
+# below it, leaving headroom for the summary tables above
+MAX_T3_ROWS = 1_000_000
+
 FONT = "Rockwell"
 RED = "#FF0000"
 WHITE = "#FFFFFF"
@@ -17,6 +22,8 @@ DARK = "#1F3864"
 LIGHT_GREY = "#F2F2F2"
 
 # CSV name mappings: (csv_name_variants, sheet_name, issue_label, severity, priority)
+# NOTE: load_df now matches by suffix as well, so SF export prefixes like
+# "internal_" or "response_codes_internal_" are handled automatically.
 ISSUE_CONFIGS = [
     {
         "csvs": ["canonicalised_inlinks.csv", "nonindexable_canonical_inlinks.csv"],
@@ -37,7 +44,7 @@ ISSUE_CONFIGS = [
         "labels": ["Security Http URLs Inlinks"],
         "sheet": "Security http URLs - Inlinks",
         "severity": "Issue",
-        "priority": "High",
+        "priority": "Medium",
         "summary": (
             "Issue Summary: We are analysing 1 report here\n"
             "1. security_http_urls_inlinks - Analysing internal links pointing to http protocol URLs, "
@@ -61,7 +68,7 @@ ISSUE_CONFIGS = [
         "labels": ["5xx Inlinks"],
         "sheet": "Internal 5xx - Inlinks",
         "severity": "Issue",
-        "priority": "High",
+        "priority": "Medium",
         "summary": (
             "Issue Summary: We are analysing 1 report here\n"
             "1. response_codes_internal_server_error_(5xx)_inlinks - Analysing internal links pointing to "
@@ -73,7 +80,7 @@ ISSUE_CONFIGS = [
         "labels": ["3xx Inlinks"],
         "sheet": "Internal 3xx - Inlinks",
         "severity": "Issue",
-        "priority": "High",
+        "priority": "Medium",
         "has_redirect_chain": True,
         "summary": (
             "Issue Summary: We are analysing 2 reports here\n"
@@ -144,8 +151,27 @@ def _gc(df, *names):
 
 
 def load_df(report_path, filename):
-    for name in ([filename] if isinstance(filename, str) else filename):
-        p = os.path.join(report_path, name)
+    """Load a Screaming Frog export CSV.
+
+    Matches by exact name first, then by suffix, because SF prefixes
+    export filenames with the menu path, e.g.
+    "client_error_(4xx)_inlinks.csv" is written to disk as
+    "internal_client_error_(4xx)_inlinks.csv". Files at or under 200
+    bytes are header-only exports and are treated as empty.
+    """
+    names = [filename] if isinstance(filename, str) else list(filename)
+    candidates = []
+    for name in names:
+        candidates.append(os.path.join(report_path, name))
+        # glob treats [] as character classes; SF names contain () only,
+        # but escape defensively so future names with brackets still match
+        pattern = glob.escape(name)
+        candidates.extend(sorted(glob.glob(os.path.join(glob.escape(report_path), "*" + pattern))))
+    seen = set()
+    for p in candidates:
+        if p in seen:
+            continue
+        seen.add(p)
         if os.path.exists(p) and os.path.getsize(p) > 200:
             try:
                 return pd.read_csv(p, encoding="utf-8", low_memory=False)
@@ -163,6 +189,7 @@ def build_non_functional_internal_links_masterfile(crawl_id: str, domain: str, r
 
     # Load internal_all for source URL indexability
     internal_map = {}
+    total_html_crawled = 0
     df_int = load_df(report_path, "internal_all.csv")
     if not df_int.empty:
         a_col = _gc(df_int, "Address")
@@ -170,6 +197,13 @@ def build_non_functional_internal_links_masterfile(crawl_id: str, domain: str, r
         sc_col = _gc(df_int, "Status Code")
         st_col = _gc(df_int, "Status")
         ru_col = _gc(df_int, "Redirect URL")
+        ct_col = _gc(df_int, "Content Type")
+        # HTML-only denominator for "% Share against Total HTML URLs Crawled";
+        # counting every crawled URL (images, PDFs, JS) understates the shares
+        if ct_col:
+            total_html_crawled = int(
+                df_int[ct_col].astype(str).str.contains("html", case=False, na=False).sum()
+            )
         for _, r in df_int.iterrows():
             url = safe_str(r.get(a_col, "")) if a_col else ""
             internal_map[url] = {
@@ -178,11 +212,8 @@ def build_non_functional_internal_links_masterfile(crawl_id: str, domain: str, r
                 "status": safe_str(r.get(st_col, "")) if st_col else "",
                 "redirect_url": safe_str(r.get(ru_col, "")) if ru_col else "",
             }
-
-    # Count total HTML URLs crawled for % share
-    total_html = sum(1 for info in internal_map.values() if True)  # all urls
-    # More accurate: count HTML indexable
-    total_html_crawled = len(internal_map) if internal_map else 1
+    if total_html_crawled == 0:
+        total_html_crawled = len(internal_map) if internal_map else 1
 
     # Load redirect chain data for 3xx sheet
     redirect_chain_map = {}
@@ -203,6 +234,28 @@ def build_non_functional_internal_links_masterfile(crawl_id: str, domain: str, r
                 "redirect_type": safe_str(r.get(rtype_col, "")) if rtype_col else "",
                 "num_redirects": safe_str(r.get(num_redir_col, "")) if num_redir_col else "",
             }
+
+    # Redirect loops are a separate SF export; the chain CSV does not
+    # reliably carry a loop column, so merge the loop report explicitly
+    df_rl = load_df(report_path, "response_codes_internal_redirect_loop.csv")
+    if df_rl.empty:
+        df_rl = load_df(report_path, "redirect_loop.csv")
+    if not df_rl.empty:
+        addr_col = _gc(df_rl, "Address")
+        num_redir_col = next((c for c in df_rl.columns if "number" in c.lower() or "count" in c.lower()), None)
+        if addr_col:
+            for _, r in df_rl.iterrows():
+                url = safe_str(r.get(addr_col, ""))
+                if not url:
+                    continue
+                entry = redirect_chain_map.get(url, {
+                    "is_chain": False,
+                    "redirect_type": "",
+                    "num_redirects": safe_str(r.get(num_redir_col, "")) if num_redir_col else "",
+                })
+                entry["is_loop"] = True
+                entry["is_chain"] = False
+                redirect_chain_map[url] = entry
 
     # Load GSC and GA4
     gsc_map = {}
@@ -229,7 +282,13 @@ def build_non_functional_internal_links_masterfile(crawl_id: str, domain: str, r
 
     # Build workbook
     buf = io.BytesIO()
-    wb = xlsxwriter.Workbook(buf, {"in_memory": True, "nan_inf_to_errors": True})
+    # strings_to_urls disabled: Excel corrupts any worksheet holding more
+    # than 65,530 hyperlinks, and Table 3 URL columns exceed that easily
+    wb = xlsxwriter.Workbook(buf, {
+        "in_memory": True,
+        "nan_inf_to_errors": True,
+        "strings_to_urls": False,
+    })
 
     def f(**kw):
         return wb.add_format(kw)
@@ -306,6 +365,17 @@ def build_non_functional_internal_links_masterfile(crawl_id: str, domain: str, r
         fol_col = _gc(df_all, "Follow")
         lo_col = _gc(df_all, "Link Origin")
 
+        # Cache classify_url per unique URL; on large crawls the same
+        # source and destination URLs repeat thousands of times
+        _classify_cache = {}
+
+        def classify_cached(url):
+            hit = _classify_cache.get(url)
+            if hit is None:
+                hit = classify_url(url, rulebook)
+                _classify_cache[url] = hit
+            return hit
+
         # Build processed rows
         rows = []
         for _, row in df_all.iterrows():
@@ -319,8 +389,8 @@ def build_non_functional_internal_links_masterfile(crawl_id: str, domain: str, r
             if src_info.get("indexability", "").lower() != "indexable":
                 continue
 
-            src_theme1, src_theme2, _, _ = classify_url(src, rulebook)
-            dst_theme1, dst_theme2, _, _ = classify_url(dst, rulebook)
+            src_theme1, src_theme2, _, _ = classify_cached(src)
+            dst_theme1, dst_theme2, _, _ = classify_cached(dst)
             gsc_src = gsc_map.get(src, {})
             gsc_dst = gsc_map.get(dst, {})
 
@@ -381,7 +451,7 @@ def build_non_functional_internal_links_masterfile(crawl_id: str, domain: str, r
             theme_unique[theme][lbl].add(r["destination"])
             theme_total[theme][lbl] += 1
             if theme not in theme_priority_map:
-                _, _, _, pri = classify_url(r["source"], rulebook)
+                _, _, _, pri = classify_cached(r["source"])
                 theme_priority_map[theme] = pri
 
         sorted_themes = sorted(theme_priority_map.items(),
@@ -546,8 +616,11 @@ def build_non_functional_internal_links_masterfile(crawl_id: str, domain: str, r
         for i, h in enumerate(t3_headers):
             ws.write(T3_HDR_ROW, i, h, f_red_lft if i == 0 else f_red_hdr)
 
-        # Table 3 data
-        for row_offset, row_data in enumerate(rows):
+        # Table 3 data (capped at MAX_T3_ROWS; rows are sorted by source
+        # impressions descending, so truncation drops the least important)
+        t3_rows = rows[:MAX_T3_ROWS]
+        truncated = len(rows) - len(t3_rows)
+        for row_offset, row_data in enumerate(t3_rows):
             r = T3_DATA_START + row_offset
             ws.set_row(r, 14.5)
             ws.write(r, 0, row_data["error_type"], f_cell_lft)
@@ -583,6 +656,12 @@ def build_non_functional_internal_links_masterfile(crawl_id: str, domain: str, r
                 ws.write(r, 28, row_data.get("temp_redirect", ""), f_cell)
                 ws.write(r, 29, row_data.get("final_redirect_url", ""), f_cell_lft)
 
+        if truncated > 0:
+            note_row = T3_DATA_START + len(t3_rows)
+            ws.write(note_row, 0,
+                     f"Note: {truncated:,} additional rows omitted due to the Excel row limit; "
+                     "full detail available in the source CSV exports", f_lbl)
+
     # BUILD DASHBOARD SHEET
     ws_dash = wb.add_worksheet("Dashboard")
     ws_dash.set_column("A:A", 25)
@@ -596,7 +675,8 @@ def build_non_functional_internal_links_masterfile(crawl_id: str, domain: str, r
         "3xx Inlinks", "No Response Inlinks",
         "Blocked by robots.txt Inlinks", "Blocked Resource Inlinks"
     ]
-    priorities_dash = ["High", "High", "High", "High", "High", "High", "High", "Low", "Low"]
+    # Priorities mirror ISSUE_CONFIGS: http, 5xx and 3xx are Medium per template
+    priorities_dash = ["High", "High", "Medium", "High", "Medium", "Medium", "High", "Low", "Low"]
 
     ws_dash.write(0, 0, "Non-functional Internal Links Summary", f_title)
     ws_dash.write(1, 0, "Add slicer for Link Type and Link Position for Table 1, Table 2 and Table 3", f_lbl)

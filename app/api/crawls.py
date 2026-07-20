@@ -28,6 +28,8 @@ from app.services.masterfile_structured_data import build_structured_data_master
 from app.services.masterfile_overview_report import build_overview_report_masterfile
 from app.services.masterfile_lorem_ipsum import build_lorem_ipsum_masterfile
 from app.services.masterfile_hreflang import build_hreflang_masterfile
+from app.services.masterfile_security import build_security_masterfile
+from app.config import settings
 
 router = APIRouter()
 
@@ -61,11 +63,38 @@ class CrawlResponse(BaseModel):
 
 @router.post("/")
 def create_crawl(payload: CrawlCreate, db: Session = Depends(get_db)):
+    # Guard: config_file must be a relative path inside CRAWL_CONFIGS_DIR
+    if payload.config_file:
+        cf = payload.config_file.replace("\\", "/")
+        if cf.startswith("/") or ".." in cf.split("/") or ":" in cf:
+            raise HTTPException(status_code=400, detail="Invalid config file reference")
+        config_path = os.path.join(settings.CRAWL_CONFIGS_DIR, cf)
+        if not os.path.exists(config_path):
+            raise HTTPException(status_code=400, detail="Selected config file does not exist on the server")
+
     crawl = Crawl(
         domain=payload.domain,
         crawl_type=payload.crawl_type,
+        config_file=payload.config_file,
         status="queued",
     )
+    db.add(crawl)
+    db.commit()
+    db.refresh(crawl)
+    run_crawl.delay(
+        crawl.id,
+        payload.domain,
+        payload.crawl_type,
+        payload.urls,
+        payload.config_file,
+        payload.gsc_account,
+        payload.gsc_property,
+        payload.ga_account,
+        payload.ga4_account,
+        payload.ga4_property,
+        payload.ga4_stream,
+    )
+    return {"id": crawl.id, "status": "queued", "message": "Crawl queued successfully"}
     db.add(crawl)
     db.commit()
     db.refresh(crawl)
@@ -535,3 +564,23 @@ def download_masterfile_hreflang(crawl_id: str, db: Session = Depends(get_db)):
     except Exception as e: raise HTTPException(status_code=500, detail=f"Failed: {str(e)}")
     domain_safe = crawl.domain.replace("https://", "").replace("http://", "").replace("/", "_").rstrip("_")
     return StreamingResponse(io.BytesIO(excel_bytes),media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",headers={"Content-Disposition": f"attachment; filename={domain_safe}_hreflang.xlsx"})
+
+
+@router.get("/{crawl_id}/download/masterfile/security")
+def download_masterfile_security(crawl_id: str, db: Session = Depends(get_db)):
+    crawl = db.query(Crawl).filter(Crawl.id == crawl_id).first()
+    if not crawl:
+        raise HTTPException(status_code=404, detail="Crawl not found")
+    if not crawl.report_path or not os.path.exists(crawl.report_path):
+        raise HTTPException(status_code=404, detail="Crawl output folder not found")
+    try:
+        excel_bytes = build_security_masterfile(crawl.id, crawl.domain, crawl.report_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate masterfile: {str(e)}")
+    domain_safe = crawl.domain.replace("https://", "").replace("http://", "").replace("/", "_").rstrip("_")
+    filename = f"{domain_safe}_security.xlsx"
+    return StreamingResponse(
+        io.BytesIO(excel_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
