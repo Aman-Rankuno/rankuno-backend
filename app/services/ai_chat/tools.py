@@ -17,14 +17,28 @@ from app.services.masterfile_overview_report import ISSUES, load_url_set
 
 
 def _find_issue(issue_label: str):
-    """Case-insensitive substring match against the ISSUES list's issue
-    label. Returns the first (category, issue, severity, priority, csvs)
-    tuple that matches, or None."""
-    needle = issue_label.strip().lower()
+    """Word-overlap match against category+issue combined, since ISSUES
+    labels are often short and ambiguous alone (e.g. "Missing" appears
+    under Page Titles, Meta Description, H1, Canonicals, Hreflang, and
+    Sitemaps). A caller like an LLM naturally asks for something like
+    "missing meta description" - longer than the bare issue label - so a
+    plain substring check (needle in issue) can never match; this instead
+    scores every ISSUES entry by how many of the caller's words appear in
+    that entry's "category + issue" text and returns the best match.
+    Returns (category, issue, severity, priority, csvs) or None if no
+    entry shares any word with the query."""
+    needle_words = set(issue_label.lower().replace("-", " ").split())
+    if not needle_words:
+        return None
+    best_match = None
+    best_score = 0
     for cat, issue, sev, pri, csvs in ISSUES:
-        if needle in issue.lower():
-            return (cat, issue, sev, pri, csvs)
-    return None
+        combined_words = set((cat + " " + issue).lower().replace("-", " ").split())
+        score = len(needle_words & combined_words)
+        if score > best_score:
+            best_score = score
+            best_match = (cat, issue, sev, pri, csvs)
+    return best_match
 
 
 def get_crawl_summary(crawl) -> dict:
