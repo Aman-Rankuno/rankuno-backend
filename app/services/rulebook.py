@@ -65,8 +65,12 @@ def load_rulebook(domain: str) -> dict:
             if not pattern or pattern == "nan":
                 continue
 
-            # Detect fallback row
-            if rule_type in ("—", "-", "Fallback") or "no match" in pattern.lower():
+            # Detect fallback row. \u2014 is the em dash (—) written as an
+            # explicit Unicode escape so it can never be corrupted again by
+            # an editor guessing the wrong file encoding (this line was
+            # previously mangled into mojibake, breaking fallback detection
+            # for any rulebook using an em dash as its fallback marker).
+            if rule_type in ("\u2014", "-", "Fallback") or "no match" in pattern.lower():
                 fallback = {
                     "theme1": theme1 or "Others",
                     "theme2": theme2 if theme2 and theme2 != "nan" else "",
@@ -92,9 +96,27 @@ def load_rulebook(domain: str) -> dict:
 
 
 def classify_url(url: str, rulebook: dict) -> tuple:
-    """Returns (theme1, theme2, language, priority)"""
+    """Returns (theme1, theme2, language, priority)
+
+    Picks the MOST SPECIFIC matching rule, not the first one in file
+    order. Rulebooks commonly have a broad parent rule (e.g. Contains
+    "/services") followed by many narrower sub-path rules (e.g. Contains
+    "/services/annotation-services-for-ai-ml") that carry real Theme 2
+    data the parent rule doesn't have. "First match wins" silently picks
+    the broad parent rule for every sub-path URL, since it's listed
+    first and Contains-matches just as well - Theme 1 still comes out
+    right (parent and child usually share it), but Theme 2 is always
+    lost. Fixed by collecting every matching rule and picking the one
+    with the longest pattern, since a longer matched substring reliably
+    indicates a more specific rule regardless of row order. Exact Match
+    rules are prioritized over Contains/StartsWith/EndsWith when both
+    match, since an exact match is maximally specific by definition.
+    """
     if not rulebook:
         return "", "", "", "Low"
+
+    EXACT_TYPES = {"exact match", "exactmatch", "exact"}
+    matches = []  # (is_exact, pattern_length, rule)
 
     for rule in rulebook["rules"]:
         rule_type = rule["rule_type"].strip().lower()
@@ -107,14 +129,20 @@ def classify_url(url: str, rulebook: dict) -> tuple:
                 matched = url.lower().startswith(pattern.lower())
             elif rule_type in ("ends with", "endswith"):
                 matched = url.lower().endswith(pattern.lower())
-            elif rule_type in ("exact match", "exactmatch", "exact"):
+            elif rule_type in EXACT_TYPES:
                 matched = url.lower() == pattern.lower()
             elif rule_type == "regex":
                 matched = bool(re.search(pattern, url))
         except Exception:
             pass
         if matched:
-            return rule["theme1"], rule["theme2"], rule["language"], rule["priority"]
+            matches.append((rule_type in EXACT_TYPES, len(pattern), rule))
+
+    if matches:
+        # Highest specificity wins: exact match first, then longest pattern.
+        matches.sort(key=lambda m: (m[0], m[1]), reverse=True)
+        best_rule = matches[0][2]
+        return best_rule["theme1"], best_rule["theme2"], best_rule["language"], best_rule["priority"]
 
     fb = rulebook["fallback"]
     return fb["theme1"], fb["theme2"], fb["language"], fb["priority"]
