@@ -205,7 +205,7 @@ def build_response_codes_masterfile(crawl_id: str, domain: str, report_path: str
         rows.append({
             "Error type": err_label,
             "Address": url,
-            "Page Theme 1": page_theme1 or "",
+            "Page Theme 1": page_theme1 if page_theme1 else "-",
             "Page Theme 2": page_theme2 if page_theme2 else "-",
             "Content Type": content_type,
             "Status Code": safe_num(sc) or sc,

@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     SECRET_KEY: str
     ANTHROPIC_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
+    IMPORT_UPLOAD_USERNAME: str = ""
+    IMPORT_UPLOAD_PASSWORD: str = ""
+    CRAWL_IMPORTS_DIR: str = r"D:\projects\rankuno-imports"
     class Config:
         env_file = ".env"
 settings = Settings()

@@ -12,12 +12,28 @@ def get_rulebook_path(domain: str) -> str:
     return os.path.join(settings.RULEBOOKS_DIR, f"{hostname}.xlsx")
 
 
+def _find_header_row(path: str, sheet_name: str) -> int:
+    """Auto-detect which row actually holds the real column headers,
+    rather than assuming a fixed row index. Looks for a row containing
+    the literal text "URL Pattern" in any cell, scanning the first 5 rows.
+    Returns the 0-indexed row to pass as pandas' header= argument, or 0
+    if nothing is found (safest fallback: assume no offset rather than
+    guessing an offset that might skip real data)."""
+    raw = pd.read_excel(path, sheet_name=sheet_name, header=None, nrows=5)
+    for i in range(len(raw)):
+        row_values = [str(v).strip().lower() for v in raw.iloc[i].tolist()]
+        if "url pattern" in row_values:
+            return i
+    return 0
+
+
 def load_rulebook(domain: str) -> dict:
     path = get_rulebook_path(domain)
     if not os.path.exists(path):
         return None
     try:
-        df = pd.read_excel(path, sheet_name="Rulebook", header=1)
+        header_row = _find_header_row(path, "Rulebook")
+        df = pd.read_excel(path, sheet_name="Rulebook", header=header_row)
         df = df.dropna(subset=["URL Pattern"])
 
         rules = []
