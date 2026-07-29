@@ -163,3 +163,5 @@ def count_crawled_pages(output_dir: str) -> int:
     except Exception:
         pass
     return 0
+
+from app.tasks import import_runner  # noqa: F401 - registers the import job task with this worker

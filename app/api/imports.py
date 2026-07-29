@@ -13,7 +13,11 @@ router = APIRouter()
 
 ALLOWED_EXTENSIONS = (".dbseospider", ".seospider")
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024  # 5 GB; large crawl files are expected
-JAVA_MAGIC = b"\xac\xed"  # same Java-serialized signature as .seospiderconfig
+# Saved crawl files (.dbseospider/.seospider) are ZIP archives internally
+# (SF logs show "DbProjectFileUncompressor ... unzip finished" when loading
+# one), unlike .seospiderconfig files which are raw Java-serialized objects.
+# Standard ZIP local-file-header signature:
+ZIP_MAGIC = b"PK\x03\x04"
 
 
 @router.post("/", dependencies=[Depends(require_import_token)])
@@ -50,7 +54,7 @@ async def create_import(
                 if not chunk:
                     break
                 if not magic_checked:
-                    if not chunk.startswith(JAVA_MAGIC):
+                    if not chunk.startswith(ZIP_MAGIC):
                         raise HTTPException(
                             status_code=400,
                             detail="File does not look like a valid Screaming Frog crawl file.",

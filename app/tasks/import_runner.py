@@ -2,16 +2,11 @@ import subprocess
 import os
 import zipfile
 from datetime import datetime, timezone
-from celery import Celery
 from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import SessionLocal
 from app.models.crawl import Crawl
-from app.tasks.crawl_runner import BULK_EXPORTS, count_crawled_pages
-
-celery_app = Celery("rankuno", broker=settings.REDIS_URL, backend=settings.REDIS_URL)
-celery_app.conf.task_time_limit = None
-celery_app.conf.task_soft_time_limit = None
+from app.tasks.crawl_runner import celery_app, BULK_EXPORTS, count_crawled_pages
 
 
 def get_db() -> Session:
